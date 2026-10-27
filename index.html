@@ -139,6 +139,9 @@ header.bar .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10p
 .rail { background: var(--surface); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px max(16px, env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)) 16px; display: flex; flex-direction: column; gap: 18px; min-height: 0; }
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border-radius: var(--r); background: var(--accent-soft); }
 .toggle b { display: block; font-size: 14px; }
+.why { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; font-size: 13px; }
+.why b { font: 600 11px/1 var(--font-body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.why ul { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
 .toggle span { font-size: 12px; color: var(--muted); }
 .switch { position: relative; width: 44px; height: 26px; flex: none; }
 .switch input { opacity: 0; width: 100%; height: 100%; margin: 0; position: absolute; cursor: pointer; }
@@ -243,10 +246,11 @@ input[type=range] { accent-color: var(--accent); height: 22px; }
       <div><b>Auto-enhance</b><span>Levels, white balance and exposure</span></div>
       <span class="switch"><input type="checkbox" id="c_auto" aria-label="Auto-enhance"><i></i></span>
     </div>
+    <div class="why" id="autoWhy" hidden><b id="autoScene"></b><ul id="autoList"></ul></div>
     <div id="controls"></div>
     <p class="hint">Drag across the photo to compare before and after. Double-tap a slider name to reset it.</p>
     <div class="actions">
-      <button class="btn" id="edAuto" type="button">Re-run auto</button>
+      <button class="btn" id="edAuto" type="button">Auto settings</button>
       <button class="btn" id="edReset" type="button">Reset all</button>
       <button class="btn" id="edApplyAll" type="button">Use on all photos</button>
       <button class="btn" id="edShare" type="button" hidden>Share / Save to Photos</button>
@@ -320,15 +324,11 @@ function analyze(d, w, h) {
   const avgSat = satSum / n / 255;
   const spread = (pct(hl, 0.95) - pct(hl, 0.05)) / 255;
 
-  const suggested = {
-    shadows: dark > 0.3 ? 40 : dark > 0.18 ? 25 : dark > 0.1 ? 12 : 0,
-    highlights: bright > 0.12 ? -40 : bright > 0.06 ? -25 : bright > 0.03 ? -12 : 0,
-    contrast: spread < 0.45 ? 15 : spread < 0.6 ? 8 : 0,
-    vibrance: avgSat < 0.1 ? 30 : avgSat < 0.2 ? 20 : 10,
-    clarity: 12,
-    sharpen: lapVar < 80 ? 45 : lapVar < 250 ? 30 : 18,
-  };
-  return { lo, hi, gain, k, suggested, stats: { dark, bright, lapVar: Math.round(lapVar), avgSat, Lmean } };
+  const base = { lo, hi, gain, k };
+  const noise = estimateNoise(d, w, h);
+  const tuned = autoTune(d, w, h, base, { noise, lapVar, Lmean });
+  return { lo, hi, gain, k, suggested: tuned.s, reasons: tuned.reasons, scene: tuned.scene,
+    stats: { dark, bright, lapVar: Math.round(lapVar), avgSat, Lmean, noise } };
 }
 
 function blurH(s, t, w, h, r) {
@@ -371,7 +371,7 @@ function gauss(src, w, h, radius, passes = 3) {
   return A;
 }
 
-function processPixels(d, w, h, a, s) {
+function toneMap(d, a, s) {
   const st = s.auto && a ? s.strength / 100 : 0;
   const ev = Math.pow(2, (s.exposure / 100) * 1.5);
   const bri = Math.pow(2, -s.brightness / 100);
@@ -408,6 +408,11 @@ function processPixels(d, w, h, a, s) {
     d[i] = r; d[i + 1] = g; d[i + 2] = b;
   }
 
+}
+
+function processPixels(d, w, h, a, s) {
+  toneMap(d, a, s);
+
   // Spatial filters scale with image size so the preview matches the full-size export.
   const scale = Math.max(w, h) / 1600;
   if (s.denoise > 0) {
@@ -437,6 +442,133 @@ function processPixels(d, w, h, a, s) {
   if (s.clarity) unsharp(Math.max(3, 22 * scale), s.clarity / 100 * 0.7, 1, 2);
   if (s.sharpen > 0) unsharp(Math.max(1, 1.3 * scale), s.sharpen / 100 * 1.6, 2);
   return d;
+}
+
+
+/* ---------- Photo-specific auto tuning ---------- */
+// Immerkaer noise estimate on luminance, in 0-255 units.
+function estimateNoise(d, w, h) {
+  if (w < 8 || h < 8) return 0;
+  const L = (x, y) => { const i = (y * w + x) * 4; return 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; };
+  let sum = 0, cnt = 0;
+  const step = Math.max(1, Math.floor(Math.min(w, h) / 200));
+  for (let y = 1; y < h - 1; y += step) for (let x = 1; x < w - 1; x += step) {
+    const v = L(x - 1, y - 1) - 2 * L(x, y - 1) + L(x + 1, y - 1) - 2 * L(x - 1, y) + 4 * L(x, y) - 2 * L(x + 1, y)
+      + L(x - 1, y + 1) - 2 * L(x, y + 1) + L(x + 1, y + 1);
+    sum += Math.abs(v); cnt++;
+  }
+  return cnt ? Math.sqrt(Math.PI / 2) * sum / (6 * cnt) : 0;
+}
+
+function shrink(d, w, h, max) {
+  const sc = Math.min(1, max / Math.max(w, h));
+  const W = Math.max(1, Math.round(w * sc)), H = Math.max(1, Math.round(h * sc));
+  const out = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const si = (Math.min(h - 1, Math.floor(y / sc)) * w + Math.min(w - 1, Math.floor(x / sc))) * 4, di = (y * W + x) * 4;
+    out[di] = d[si]; out[di + 1] = d[si + 1]; out[di + 2] = d[si + 2]; out[di + 3] = 255;
+  }
+  return { d: out, w: W, h: H };
+}
+
+// Exposure, contrast, clipping, colorfulness and color cast of an image.
+function measure(d) {
+  let n = 0, sL = 0, sL2 = 0, lo = 0, hi = 0, dk = 0, rg = 0, yb = 0, rg2 = 0, yb2 = 0, mid = 0, mrg = 0, myb = 0, skin = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const L = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    n++; sL += L; sL2 += L * L;
+    if (L < 0.015) lo++; else if (L > 0.985) hi++;
+    if (L < 0.08) dk++;
+    const a1 = r - g, b1 = 0.5 * (r + g) - b;
+    rg += a1; yb += b1; rg2 += a1 * a1; yb2 += b1 * b1;
+    if (L > 0.22 && L < 0.82) { mid++; mrg += a1; myb += b1; }
+    const cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b, cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b;
+    if (cb > 77 && cb < 127 && cr > 135 && cr < 170 && L > 0.2) skin++;
+  }
+  const m = sL / n, sd = Math.sqrt(Math.max(0, sL2 / n - m * m));
+  const mrgA = rg / n, mybA = yb / n;
+  const C = Math.sqrt(Math.max(0, rg2 / n - mrgA * mrgA) + Math.max(0, yb2 / n - mybA * mybA)) + 0.3 * Math.hypot(mrgA, mybA);
+  return { m, sd, lo: lo / n, hi: hi / n, dk: dk / n, C,
+    castRG: mid ? mrg / mid / 255 : 0, castYB: mid ? myb / mid / 255 : 0, skin: skin / n };
+}
+
+const TUNE = [["exposure", -80, 80], ["contrast", -40, 50], ["highlights", -70, 10], ["shadows", -10, 70],
+              ["vibrance", -30, 60], ["warmth", -50, 50], ["tint", -40, 40]];
+
+function autoTune(d0, w0, h0, base, info) {
+  const sm = shrink(d0, w0, h0, 180);
+  const M0 = measure(sm.d);
+  const portrait = M0.skin > 0.08 && M0.skin < 0.55;   // a frame that is mostly orange is a sunset, not a face
+  const golden = M0.castYB > 0.05 && M0.castRG > 0.0 && M0.m > 0.25;  // sunsets, candlelight
+  const night = M0.m < 0.16 && M0.dk > 0.45;
+  const T = {
+    m: Math.min(0.55, Math.max(night ? 0.3 : 0.38, 0.46 + 0.3 * (M0.m - 0.46))),
+    sd: Math.max(0.18, Math.min(0.25, M0.sd * 1.15)),
+    lo: Math.max(0.003, M0.lo * 0.6), hi: Math.max(0.003, M0.hi * 0.5),
+    C: portrait ? Math.max(Math.min(M0.C, 60), Math.min(40, Math.max(15, M0.C * 1.1)))
+                : Math.max(Math.min(M0.C, 80), Math.min(55, Math.max(20, M0.C * 1.3 + 4))),
+    // Neutralize casts, except warm light that is part of the scene.
+    castRG: golden ? M0.castRG * 0.85 : 0, castYB: golden ? M0.castYB * 0.85 : 0,
+  };
+  const zero = { auto: true, strength: 100, exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0,
+    saturation: 0, vibrance: 0, warmth: 0, tint: 0, clarity: 0, sharpen: 0, denoise: 0, blur: 0 };
+  const buf = new Uint8ClampedArray(sm.d.length);
+  const evalS = s => {
+    buf.set(sm.d); toneMap(buf, base, s);
+    const M = measure(buf);
+    let p = ((M.m - T.m) / 0.08) ** 2
+      + 0.5 * ((M.sd - T.sd) / 0.05) ** 2
+      + Math.max(0, M.lo - T.lo) * 500 + Math.max(0, M.hi - T.hi) * 700
+      + Math.max(0, M.dk - 0.15) * 25
+      + 0.6 * ((M.C - T.C) / 12) ** 2
+      + ((M.castRG - T.castRG) ** 2 + (M.castYB - T.castYB) ** 2) / (0.025 ** 2);
+    for (const [k] of TUNE) p += 1.6 * (s[k] / 100) ** 2;     // prefer gentle edits
+    return { p, M };
+  };
+  let s = { ...zero }, best = evalS(s);
+  for (const step of [32, 16, 8, 4]) {
+    for (let it = 0; it < 4; it++) {
+      let improved = false;
+      for (const [k, lo, hi] of TUNE) for (const dir of [1, -1]) {
+        const v = Math.min(hi, Math.max(lo, s[k] + dir * step));
+        if (v === s[k]) continue;
+        const t = { ...s, [k]: v }, r = evalS(t);
+        if (r.p < best.p - 1e-4) { best = r; s = t; improved = true; }
+      }
+      if (!improved) break;
+    }
+  }
+
+  // Detail: sharpen soft photos, but less when noisy or a portrait; reduce noise brightened from the dark.
+  const lift = Math.max(1, best.M.m / Math.max(0.03, M0.m));
+  const effNoise = info.noise * Math.sqrt(lift);
+  s.denoise = Math.round(Math.min(60, Math.max(0, (effNoise - 2.2) * 12)));
+  let sharp = info.lapVar < 80 ? 45 : info.lapVar < 250 ? 30 : 18;
+  if (effNoise > 4) sharp *= 0.55;
+  if (portrait) sharp *= 0.7;
+  s.sharpen = Math.round(sharp);
+  s.clarity = portrait ? 5 : night ? 4 : M0.sd < 0.17 ? 18 : 12;
+
+  const reasons = [];
+  const brighter = best.M.m - M0.m;
+  if (brighter > 0.05) reasons.push(night ? "Night shot: brightened while keeping it dark" : "Underexposed: brightened");
+  else if (brighter < -0.05) reasons.push("Overexposed: toned down");
+  if (s.highlights <= -15 || (M0.hi > 0.02 && best.M.hi < M0.hi)) reasons.push("Recovered bright highlights");
+  if (s.shadows >= 15 && M0.dk > 0.05) reasons.push("Opened up dark shadows");
+  if (best.M.sd - M0.sd > 0.025 && M0.sd < 0.17) reasons.push("Flat or hazy: added contrast");
+  const cast = Math.hypot(M0.castRG, M0.castYB);
+  if (golden) reasons.push("Warm light detected: kept the warmth");
+  else if (cast > 0.025) {
+    const name = Math.abs(M0.castYB) >= Math.abs(M0.castRG) ? (M0.castYB > 0 ? "yellow" : "blue") : (M0.castRG > 0 ? "magenta" : "green");
+    reasons.push(`Removed a ${name} color cast`);
+  }
+  if (best.M.C - M0.C > 4) reasons.push(portrait ? "Livened colors, skin kept natural" : "Boosted dull colors");
+  else if (portrait) reasons.push("People detected: kept skin tones natural");
+  if (s.denoise >= 10) reasons.push("Reduced grain from low light");
+  if (s.sharpen >= 35) reasons.push("Sharpened a soft photo");
+  if (!reasons.length) reasons.push("Already well exposed: light touch-up only");
+  return { s, reasons, scene: portrait ? "Portrait" : night ? "Night" : golden ? "Warm light" : "General" };
 }
 
 if (typeof self !== "undefined" && typeof self.postMessage === "function" && typeof window === "undefined") {
@@ -677,6 +809,12 @@ const KEYS = GROUPS.flatMap(g => g[1].map(c => c[0]));
 function syncControls() {
   const s = ed.it.s;
   $("c_auto").checked = s.auto; $("grpAuto").hidden = !s.auto;
+  const a = ed.it.analysis;
+  $("autoWhy").hidden = !(s.auto && a && a.reasons);
+  if (a && a.reasons) {
+    $("autoScene").textContent = `Auto read this photo · ${a.scene}`;
+    $("autoList").replaceChildren(...a.reasons.map(r => Object.assign(document.createElement("li"), { textContent: r })));
+  }
   for (const k of KEYS) {
     $("c_" + k).value = s[k];
     const o = $("o_" + k), v = s[k];
