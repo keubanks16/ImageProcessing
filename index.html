@@ -157,6 +157,9 @@ legend { font: 600 11px/1 var(--font-body); letter-spacing: .12em; text-transfor
 .ctl output { font: 12px var(--font-mono); color: var(--muted); min-width: 4ch; text-align: right; }
 .ctl output.on { color: var(--accent); }
 .ctl input { grid-column: 1 / -1; width: 100%; }
+.check { display: flex; gap: 10px; align-items: flex-start; font-size: 12px; color: var(--muted); }
+.check b { display: block; color: var(--fg); font-size: 13px; }
+.check input { margin-top: 3px; accent-color: var(--accent); width: 18px; height: 18px; flex: none; }
 .sel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
 input[type=range] { accent-color: var(--accent); height: 22px; }
 .rail .actions .btn { flex: 1 1 45%; justify-content: center; }
@@ -250,6 +253,7 @@ input[type=range] { accent-color: var(--accent); height: 22px; }
     <div class="why" id="autoWhy" hidden><b id="autoScene"></b><ul id="autoList"></ul></div>
     <div id="controls"></div>
     <div class="ctl"><label for="c_upscale">Upscale when saving</label><select id="c_upscale" class="sel"><option value="1">Off</option><option value="2">2× pixels</option><option value="4">4× pixels</option></select></div>
+    <label class="check" for="c_ai"><input type="checkbox" id="c_ai"><span><b>Use AI upscaling</b> Rebuilds fine detail with a neural network. Free and runs on your device; downloads a small model the first time. Works on photos up to about 2 MP.</span></label>
     <p class="hint">Drag across the photo to compare before and after. Double-tap a slider name to reset it.</p>
     <div class="actions">
       <button class="btn" id="edAuto" type="button">Auto settings</button>
@@ -656,6 +660,7 @@ function autoTune(d0, w0, h0, base, info) {
   const want = long < 1000 ? 4 : long < 2000 ? 2 : 1;
   const [UW, UH, uf] = upscaleSize(info.fullW, info.fullH, want);
   s.upscale = uf > 1 ? want : 1;
+  s.ai = s.upscale > 1 && info.fullW * info.fullH <= 2.1e6;   // AI upscaling for photos small enough to run on a phone
 
   const reasons = [];
   const brighter = best.M.m - M0.m;
@@ -676,7 +681,7 @@ function autoTune(d0, w0, h0, base, info) {
   if (s.sharpen >= 35) reasons.push("Sharpened a soft photo");
   if (s.local >= 30) reasons.push("Brought out local detail and texture");
   else reasons.push("Enhanced local detail");
-  if (uf > 1) reasons.push(`Low resolution: upscaled ${uf}× to ${UW} × ${UH} on save`);
+  if (uf > 1) reasons.push(`Low resolution: ${s.ai ? "AI " : ""}upscaled ${uf}× to ${UW} × ${UH} on save`);
   return { s, reasons, scene: portrait ? "Portrait" : night ? "Night" : golden ? "Warm light" : "General" };
 }
 
@@ -702,7 +707,7 @@ if (typeof module !== "undefined") module.exports = { analyze, processPixels, ga
 (() => {
 const $ = id => document.getElementById(id);
 const IMG_EXT = /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif|tiff?)$/i;
-const DEFAULTS = { auto: true, strength: 100, local: 0, upscale: 1, exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0,
+const DEFAULTS = { auto: true, strength: 100, local: 0, upscale: 1, ai: false, exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0,
   saturation: 0, vibrance: 0, warmth: 0, tint: 0, clarity: 0, sharpen: 0, denoise: 0, blur: 0 };
 const GROUPS = [
   ["Auto", [["strength", "Auto strength", 0, 150]]],
@@ -826,7 +831,7 @@ function renderCard(it) {
     $("grid").appendChild(el);
   }
   el.querySelector(".name").textContent = it.name; el.querySelector(".name").title = it.name;
-  el.querySelector(".dim").textContent = it.w ? (it.s && it.s.upscale > 1 ? `${it.w} × ${it.h} → ${it.s.upscale}×` : `${it.w} × ${it.h}`) : it.status === "error" ? "Couldn't open" : "Waiting…";
+  el.querySelector(".dim").textContent = it.w ? (it.s && it.s.upscale > 1 ? `${it.w} × ${it.h} → ${it.s.upscale}×${it.s.ai ? " AI" : ""}` : `${it.w} × ${it.h}`) : it.status === "error" ? "Couldn't open" : "Waiting…";
   const th = el.querySelector(".thumb");
   if (it.status === "error") th.innerHTML = `<span class="chip err">Unsupported</span>`;
   else if (it.thumbURL) th.innerHTML = `<img alt="" src="${it.thumbURL}">${it.s.auto ? '<span class="chip">AUTO</span>' : ""}`;
@@ -856,9 +861,62 @@ function outType(it) {
   return t === "image/png" || t === "image/webp" ? t : "image/jpeg";
 }
 const EXT = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
-async function exportItem(it) {
+/* ---------- AI upscaling (UpscalerJS + ESRGAN Slim, loaded only when first needed) ---------- */
+const AI_SRC = {
+  tf: "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js",
+  upscaler: "https://cdn.jsdelivr.net/npm/upscaler@1.0.0-beta.19/dist/browser/umd/upscaler.min.js",
+  model: f => `https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-slim@1.0.0-beta.12/dist/umd/${f}x.min.js`,
+};
+const AI_MAX_IN = 2.1e6;
+const scriptLoads = {}, upscalers = {};
+function loadScript(src) {
+  return scriptLoads[src] ||= new Promise((res, rej) => {
+    const el = document.createElement("script"); el.src = src; el.crossOrigin = "anonymous";
+    el.onload = res;
+    el.onerror = () => { delete scriptLoads[src]; el.remove(); rej(new Error("Couldn't download the AI model. Check your connection and try again.")); };
+    document.head.appendChild(el);
+  });
+}
+async function getUpscaler(f) {
+  await loadScript(AI_SRC.tf); await loadScript(AI_SRC.upscaler); await loadScript(AI_SRC.model(f));
+  if (!upscalers[f]) {
+    const model = window[`ESRGANSlim${f}x`];
+    if (!model) throw new Error("The AI model didn't load.");
+    upscalers[f] = new window.Upscaler({ model });
+  }
+  return upscalers[f];
+}
+// Pick the AI model scale (4 or 2) that fits phone limits, or 0 to use standard upscaling.
+function aiFactor(w, h, want) {
+  if (w * h > AI_MAX_IN) return 0;
+  for (const f of want >= 4 ? [4, 2] : [2]) if (w * h * f * f <= 16e6 && Math.max(w, h) * f <= 8192) return f;
+  return 0;
+}
+async function aiUpscale(img, f, onProgress) {
+  const up = await getUpscaler(f), tf = window.tf;
+  const input = tf.browser.fromPixels(img);
+  let out;
+  try { out = await up.upscale(input, { output: "tensor", patchSize: 64, padding: 6, progress: p => onProgress && onProgress(p) }); }
+  finally { input.dispose(); }
+  const pix = tf.tidy(() => out.clipByValue(0, 255).round().toInt());
+  out.dispose();
+  const [H, W] = pix.shape;
+  const data = await tf.browser.toPixels(pix);
+  pix.dispose();
+  return new ImageData(data, W, H);
+}
+
+async function exportItem(it, onProgress) {
   const { data } = await decode(it.file, EXPORT_MAX);
-  const out = await processData(batchW, data, it.analysis, it.s, { upscale: true });
+  const f = it.s.upscale > 1 && it.s.ai ? aiFactor(data.width, data.height, it.s.upscale) : 0;
+  let out = await processData(batchW, data, it.analysis, it.s, { upscale: !f });
+  if (f) {
+    try { out = await aiUpscale(out, f, onProgress); }
+    catch (e) {
+      toast(`AI upscaling didn't work here (${e.message}). Used standard upscaling instead.`);
+      out = await processData(batchW, data, it.analysis, it.s, { upscale: true });
+    }
+  }
   const type = outType(it);
   const blob = await canvasBlob(toCanvas(out), type, +$("quality").value / 100);
   const base = it.name.replace(/\.[^.]+$/, "");
@@ -871,7 +929,7 @@ function download(blob, name) {
 }
 async function saveOne(it) {
   setStatus(`Saving ${it.name} at full size…`);
-  try { const { blob, name } = await exportItem(it); download(blob, name); setStatus(`Saved ${name}`); }
+  try { const { blob, name } = await exportItem(it, p => setStatus(`AI upscaling ${it.name}: ${Math.round(p * 100)}%`)); download(blob, name); setStatus(`Saved ${name}`); }
   catch (e) { toast(`Couldn't save ${it.name}: ${e.message}`); setStatus(""); }
 }
 $("btnZip").addEventListener("click", async () => {
@@ -881,7 +939,7 @@ $("btnZip").addEventListener("click", async () => {
   for (let i = 0; i < list.length; i++) {
     setProgress(i / list.length, `Processing ${i + 1} of ${list.length} at full size…`);
     try {
-      let { blob, name } = await exportItem(list[i]);
+      let { blob, name } = await exportItem(list[i], p => setProgress((i + p) / list.length, `AI upscaling ${i + 1} of ${list.length}: ${Math.round(p * 100)}%`));
       let n = 2, base = name; while (used.has(name)) name = base.replace(/(\.[^.]+)$/, `_${n++}$1`);
       used.add(name); zip.file(name, blob);
     } catch (e) { toast(`Skipped ${list[i].name}: ${e.message}`); }
@@ -917,7 +975,7 @@ const ed = { it: null, src: null, busy: false, dirty: false, split: 0.5 };
 const KEYS = GROUPS.flatMap(g => g[1].map(c => c[0]));
 function syncControls() {
   const s = ed.it.s;
-  $("c_auto").checked = s.auto; $("grpAuto").hidden = !s.auto; $("c_upscale").value = String(s.upscale || 1);
+  $("c_auto").checked = s.auto; $("grpAuto").hidden = !s.auto; $("c_upscale").value = String(s.upscale || 1); $("c_ai").checked = !!s.ai; $("c_ai").disabled = !(s.upscale > 1);
   const a = ed.it.analysis;
   $("autoWhy").hidden = !(s.auto && a && a.reasons);
   if (a && a.reasons) {
@@ -935,7 +993,8 @@ $("rail").addEventListener("input", e => {
   if (!ed.it) return;
   const k = e.target.id.slice(2);
   if (k === "auto") ed.it.s.auto = e.target.checked;
-  else if (k === "upscale") { ed.it.s.upscale = +e.target.value; renderCard(ed.it); return; }
+  else if (k === "upscale") { ed.it.s.upscale = +e.target.value; syncControls(); renderCard(ed.it); return; }
+  else if (k === "ai") { ed.it.s.ai = e.target.checked; renderCard(ed.it); return; }
   else if (KEYS.includes(k)) ed.it.s[k] = +e.target.value;
   else return;
   syncControls(); schedule();
