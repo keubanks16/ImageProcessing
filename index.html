@@ -3,45 +3,60 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Darkroom Image Enhancer</title>
+<title>GS Photo Lab</title>
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="img/icon-192.png">
+<meta name="apple-mobile-web-app-title" content="GS Photo Lab">
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="theme-color" content="#14171c">
+<meta name="theme-color" content="#0B2753">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;700&family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Graduate&family=Barlow+Semi+Condensed:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
-/* Layout: sticky toolbar over a contact-sheet grid; full-screen editor with the photo on top and a control rail beside (desktop) or below (phone). */
+/* Layout: navy GS team bar over a contact-sheet grid; full-screen editor with the photo on top and a control rail beside (desktop) or below (phone).
+   Colors and type follow the GS Baseball Hub: navy, Carolina blue, royal accent, red trim. */
 :root {
-  --bg: #f3f4f6;
-  --surface: #ffffff;
-  --surface-2: #e8eaee;
-  --line: #d4d8df;
-  --fg: #1a1d23;
-  --muted: #5f6672;
-  --accent: #c2410c;          /* safelight amber-red */
-  --accent-soft: #fde7d9;
-  --accent-fg: #ffffff;
-  --good: #15803d;
-  --bad: #b91c1c;
-  --stage: #0f1115;
-  --font-display: "Sora", "Segoe UI", system-ui, sans-serif;
-  --font-body: "Manrope", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --bg: #F3F6FB;
+  --surface: #FFFFFF;
+  --surface-2: #E6ECF5;
+  --line: #D4DBE6;
+  --fg: #0B1C3D;
+  --muted: #4A5874;
+  --navy: #0B2753;
+  --carolina: #6DA0D6;
+  --bar: #0B2753;
+  --bar-fg: #FFFFFF;
+  --bar-dim: #A9C3E4;
+  --accent: #245FA8;
+  --accent-soft: #DCE8F6;
+  --accent-fg: #FFFFFF;
+  --trim: #C3392D;
+  --good: #18834F;
+  --bad: #C3392D;
+  --stage: #04122D;
+  --font-display: "Graduate", "Rockwell", "Roboto Slab", Georgia, serif;
+  --font-body: "Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --r: 10px;
+  --cut: 8px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #111317; --surface: #1a1d23; --surface-2: #23272f; --line: #313641;
-    --fg: #e9ebef; --muted: #9aa1ad; --accent: #f08a4b; --accent-soft: #3a2418; --accent-fg: #1a0e07;
-    --good: #4ade80; --bad: #f87171; --stage: #08090b; color-scheme: dark;
+    --bg: #04122D; --surface: #0A1D40; --surface-2: #0E2550; --line: #1B3364;
+    --fg: #E7EEF9; --muted: #A6B7D3; --navy: #0B2753; --carolina: #8FBDF0;
+    --bar: #020A1C; --bar-fg: #FFFFFF; --bar-dim: #7F9AC4;
+    --accent: #7FB0E6; --accent-soft: #15315F; --accent-fg: #04122D; --trim: #F06A5C;
+    --good: #3DBE7C; --bad: #F06A5C; --stage: #020A1C; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #111317; --surface: #1a1d23; --surface-2: #23272f; --line: #313641;
-  --fg: #e9ebef; --muted: #9aa1ad; --accent: #f08a4b; --accent-soft: #3a2418; --accent-fg: #1a0e07;
-  --good: #4ade80; --bad: #f87171; --stage: #08090b; color-scheme: dark;
+  --bg: #04122D; --surface: #0A1D40; --surface-2: #0E2550; --line: #1B3364;
+  --fg: #E7EEF9; --muted: #A6B7D3; --navy: #0B2753; --carolina: #8FBDF0;
+  --bar: #020A1C; --bar-fg: #FFFFFF; --bar-dim: #7F9AC4;
+  --accent: #7FB0E6; --accent-soft: #15315F; --accent-fg: #04122D; --trim: #F06A5C;
+  --good: #3DBE7C; --bad: #F06A5C; --stage: #020A1C; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 .vh { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; left: 0; top: 0; }
@@ -51,7 +66,7 @@ body {
   font: 15px/1.5 var(--font-body);
   -webkit-font-smoothing: antialiased;
 }
-body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bar); }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -60,13 +75,17 @@ button { cursor: pointer; }
 
 header.bar {
   position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
-  background: var(--surface); border-bottom: 1px solid var(--line);
+  background: var(--bar); color: var(--bar-fg); border-bottom: 3px solid var(--carolina);
 }
+header.bar .btn { background: transparent; border-color: #ffffff40; color: var(--bar-fg); }
+header.bar .btn:hover { background: #ffffff14; }
+header.bar .btn.primary { background: var(--carolina); border-color: var(--carolina); color: #04122D; }
 header.bar .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 12px; }
-.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; }
-.brand h1 { font: 700 20px/1 var(--font-display); letter-spacing: -0.01em; margin: 0; }
-.brand h1 span { color: var(--accent); }
-.brand small { color: var(--muted); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.brand img { height: 30px; width: auto; display: block; }
+.brand h1 { font: 400 20px/1 var(--font-display); letter-spacing: .02em; margin: 0; text-transform: uppercase; }
+.brand h1 span { color: var(--carolina); }
+.brand small { color: var(--bar-dim); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .btn {
@@ -75,7 +94,7 @@ header.bar .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10p
   min-height: 38px; white-space: nowrap;
 }
 .btn:hover { background: var(--surface-2); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); border-radius: 0; clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut)); }
 .btn.primary:hover { filter: brightness(1.06); }
 .btn.ghost { border-color: transparent; background: transparent; }
 .btn:disabled { opacity: .5; cursor: default; }
@@ -92,7 +111,7 @@ header.bar .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10p
   padding: 40px 20px; text-align: center; transition: border-color .15s, background .15s;
 }
 .drop.over { border-color: var(--accent); background: var(--accent-soft); }
-.drop h2 { font: 700 clamp(20px, 4vw, 28px)/1.2 var(--font-display); margin: 0 0 8px; text-wrap: balance; }
+.drop h2 { font: 400 clamp(20px, 4vw, 28px)/1.2 var(--font-display); text-transform: uppercase; letter-spacing: .01em; margin: 0 0 8px; text-wrap: balance; }
 .drop p { color: var(--muted); margin: 0 auto 18px; max-width: 52ch; }
 .drop .actions { justify-content: center; }
 .drop.compact { padding: 16px 20px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; text-align: left; }
@@ -109,7 +128,7 @@ header.bar .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10p
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .thumb .spin { width: 22px; height: 22px; border: 2px solid #ffffff33; border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.chip { position: absolute; left: 8px; top: 8px; font: 500 11px/1 var(--font-mono); letter-spacing: .04em; padding: 4px 6px; border-radius: 4px; background: #000000a6; color: #fff; }
+.chip { position: absolute; left: 8px; top: 8px; font: 500 11px/1 var(--font-mono); letter-spacing: .04em; padding: 4px 6px; border-radius: 4px; background: #0B2753e6; color: #fff; border-left: 3px solid var(--carolina); }
 .chip.err { background: var(--bad); }
 .meta { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
 .name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -125,7 +144,7 @@ header.bar .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10p
   background: var(--surface); border-bottom: 1px solid var(--line);
   padding: calc(8px + env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px));
 }
-.ed-top .title { font-weight: 700; margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 120px; }
+.ed-top .title { font: 400 16px/1.2 var(--font-display); text-transform: uppercase; margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 120px; }
 .stage { position: relative; background: var(--stage); overflow: hidden; min-height: 0; display: grid; place-items: center; touch-action: none; user-select: none; -webkit-user-select: none; }
 .compare { position: relative; max-width: 100%; max-height: 100%; }
 .compare canvas { display: block; max-width: 100%; max-height: calc(100vh - 140px); width: auto; height: auto; }
@@ -184,7 +203,7 @@ input[type=range] { accent-color: var(--accent); height: 22px; }
 
 <header class="bar">
   <div class="wrap">
-    <div class="brand"><h1>Dark<span>room</span></h1><small>Auto photo enhancer</small></div>
+    <div class="brand"><img src="img/gs-logo-light.png" alt="GS" width="38" height="30"><h1>Photo <span>Lab</span></h1><small>GS Baseball</small></div>
     <div class="actions">
       <button class="btn" id="btnAdd" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Add</button>
       <button class="btn" id="btnClear" type="button" disabled>Clear</button>
@@ -955,7 +974,7 @@ $("btnZip").addEventListener("click", async () => {
   }
   setProgress(0.98, "Building ZIP…");
   const out = await zip.generateAsync({ type: "blob", compression: "STORE" });
-  download(out, `enhanced_photos_${new Date().toISOString().slice(0, 10)}.zip`);
+  download(out, `gs_photo_lab_${new Date().toISOString().slice(0, 10)}.zip`);
   setProgress(null); setStatus(`Downloaded ${used.size} photo${used.size === 1 ? "" : "s"} as a ZIP.`);
   refreshChrome();
 });
