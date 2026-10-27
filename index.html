@@ -44,6 +44,7 @@
   --good: #4ade80; --bad: #f87171; --stage: #08090b; color-scheme: dark;
 }
 * { box-sizing: border-box; }
+.vh { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; left: 0; top: 0; }
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
@@ -215,9 +216,9 @@ input[type=range] { accent-color: var(--accent); height: 22px; }
 
   <section class="grid" id="grid"></section>
 
-  <input type="file" id="inFiles" accept="image/*,.heic,.heif,.zip,application/zip" multiple hidden>
-  <input type="file" id="inZip" accept=".zip,application/zip,application/x-zip-compressed" hidden>
-  <input type="file" id="inFolder" webkitdirectory directory multiple hidden>
+  <input type="file" id="inFiles" class="vh" accept="image/*" multiple tabindex="-1" aria-hidden="true">
+  <input type="file" id="inZip" class="vh" accept=".zip,application/zip,application/x-zip-compressed" tabindex="-1" aria-hidden="true">
+  <input type="file" id="inFolder" class="vh" webkitdirectory directory multiple tabindex="-1" aria-hidden="true">
 </main>
 
 <section class="editor" id="editor" hidden aria-label="Photo editor">
@@ -538,7 +539,7 @@ async function expand(files) {
   return out;
 }
 let adding = Promise.resolve();
-function addFiles(list) { adding = adding.then(() => addFilesNow([...list])); }
+function addFiles(list) { const copy = [...list]; adding = adding.then(() => addFilesNow(copy)); }
 async function addFilesNow(list) {
   const files = await expand(list);
   if (!files.length) { setStatus(""); return; }
@@ -779,7 +780,9 @@ $("stage").addEventListener("pointercancel", () => dragging = false);
 const pick = { files: $("inFiles"), zip: $("inZip"), folder: $("inFolder") };
 document.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => pick[b.dataset.pick].click());
 $("btnAdd").onclick = () => $("inFiles").click();
-for (const inp of Object.values(pick)) inp.addEventListener("change", () => { if (inp.files.length) addFiles(inp.files); inp.value = ""; });
+for (const inp of Object.values(pick)) inp.addEventListener("change", () => { const files = [...inp.files]; inp.value = ""; if (files.length) addFiles(files); });
+// Phones and tablets can't pick folders; hide that option there.
+if (/iPad|iPhone|iPod|Android/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) || !("webkitdirectory" in pick.folder)) document.querySelector('[data-pick="folder"]').hidden = true;
 
 async function readEntry(entry, out) {
   if (entry.isFile) { out.push(await new Promise((res, rej) => entry.file(res, rej))); return; }
