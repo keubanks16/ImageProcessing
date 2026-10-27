@@ -1150,23 +1150,6 @@ function setProgress(f, text) {
 let toastT;
 function toast(t) { const el = $("toast"); el.textContent = t; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => el.hidden = true, 3500); }
 
-/* Sample photo so the first view shows what the tool does. */
-(async function sample() {
-  const cv = document.createElement("canvas"); cv.width = 1200; cv.height = 800;
-  const c = cv.getContext("2d");
-  const sky = c.createLinearGradient(0, 0, 0, 520); sky.addColorStop(0, "#5a6672"); sky.addColorStop(1, "#8a8478");
-  c.fillStyle = sky; c.fillRect(0, 0, 1200, 800);
-  c.fillStyle = "#8f8a70"; c.beginPath(); c.arc(860, 230, 70, 0, 7); c.fill();
-  c.fillStyle = "#3e4638"; c.beginPath(); c.moveTo(0, 560); c.lineTo(220, 380); c.lineTo(420, 520); c.lineTo(640, 330); c.lineTo(900, 540); c.lineTo(1200, 420); c.lineTo(1200, 800); c.lineTo(0, 800); c.fill();
-  c.fillStyle = "#2c3128"; c.fillRect(0, 620, 1200, 180);
-  c.fillStyle = "#4f5a3f"; c.beginPath(); c.ellipse(600, 700, 520, 60, 0, 0, 7); c.fill();
-  c.fillStyle = "#c9c4b4"; c.fillRect(540, 560, 120, 80); c.fillStyle = "#5c3f2e"; c.beginPath(); c.moveTo(525, 565); c.lineTo(600, 510); c.lineTo(675, 565); c.fill();
-  const id = c.getImageData(0, 0, 1200, 800), d = id.data;
-  for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 10; d[i] = d[i] * 0.78 + 18 + n; d[i + 1] = d[i + 1] * 0.78 + 20 + n; d[i + 2] = d[i + 2] * 0.78 + 30 + n; }
-  c.putImageData(id, 0, 0);
-  const blob = await canvasBlob(cv, "image/jpeg", 0.9);
-  addFiles([new File([blob], "sample-hazy-landscape.jpg", { type: "image/jpeg" })]);
-})();
 })();
 </script>
 </body>
