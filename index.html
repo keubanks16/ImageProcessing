@@ -577,7 +577,7 @@ function shrink(d, w, h, max) {
 
 // Exposure, contrast, clipping, colorfulness and color cast of an image.
 function measure(d) {
-  let n = 0, sL = 0, sL2 = 0, lo = 0, hi = 0, dk = 0, rg = 0, yb = 0, rg2 = 0, yb2 = 0, mid = 0, mrg = 0, myb = 0, skin = 0;
+  let n = 0, sL = 0, sL2 = 0, lo = 0, hi = 0, dk = 0, rg = 0, yb = 0, rg2 = 0, yb2 = 0, mid = 0, mrg = 0, myb = 0, skin = 0, neu = 0, nrg = 0, nyb = 0;
   for (let i = 0; i < d.length; i += 4) {
     const r = d[i], g = d[i + 1], b = d[i + 2];
     const L = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
@@ -587,6 +587,10 @@ function measure(d) {
     const a1 = r - g, b1 = 0.5 * (r + g) - b;
     rg += a1; yb += b1; rg2 += a1 * a1; yb2 += b1 * b1;
     if (L > 0.22 && L < 0.82) { mid++; mrg += a1; myb += b1; }
+    if (L > 0.62 && L < 0.97) {
+      const mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      if (mx - mn < 45) { neu++; nrg += a1; nyb += b1; }   // bright near-whites (shirts, clouds, walls): where a cast really shows
+    }
     const cb = 128 - 0.1687 * r - 0.3313 * g + 0.5 * b, cr = 128 + 0.5 * r - 0.4187 * g - 0.0813 * b;
     if (cb > 77 && cb < 127 && cr > 135 && cr < 170 && L > 0.2) skin++;
   }
@@ -594,24 +598,25 @@ function measure(d) {
   const mrgA = rg / n, mybA = yb / n;
   const C = Math.sqrt(Math.max(0, rg2 / n - mrgA * mrgA) + Math.max(0, yb2 / n - mybA * mybA)) + 0.3 * Math.hypot(mrgA, mybA);
   return { m, sd, lo: lo / n, hi: hi / n, dk: dk / n, C,
-    castRG: mid ? mrg / mid / 255 : 0, castYB: mid ? myb / mid / 255 : 0, skin: skin / n };
+    castRG: neu > n * 0.01 ? nrg / neu / 255 : mid ? 0.4 * mrg / mid / 255 : 0,
+    castYB: neu > n * 0.01 ? nyb / neu / 255 : mid ? 0.4 * myb / mid / 255 : 0, skin: skin / n };
 }
 
-const TUNE = [["exposure", -80, 80], ["contrast", -40, 50], ["highlights", -70, 10], ["shadows", -10, 70],
-              ["vibrance", -30, 60], ["warmth", -50, 50], ["tint", -40, 40]];
+const TUNE = [["exposure", -80, 80], ["contrast", -25, 50], ["highlights", -70, 10], ["shadows", -10, 70],
+              ["vibrance", -15, 60], ["warmth", -45, 45], ["tint", -25, 25]];
 
 function autoTune(d0, w0, h0, base, info) {
   const sm = shrink(d0, w0, h0, 180);
   const M0 = measure(sm.d);
   const portrait = M0.skin > 0.08 && M0.skin < 0.55;   // a frame that is mostly orange is a sunset, not a face
-  const golden = M0.castYB > 0.05 && M0.castRG > 0.0 && M0.m > 0.25;  // sunsets, candlelight
+  const golden = M0.castYB > 0.06 && M0.castRG > 0.005 && M0.m > 0.25;  // sunsets, candlelight: even the grays look warm
   const night = M0.m < 0.16 && M0.dk > 0.45;
   const T = {
     m: Math.min(0.55, Math.max(night ? 0.3 : 0.38, 0.46 + 0.3 * (M0.m - 0.46))),
-    sd: Math.max(0.18, Math.min(0.25, M0.sd * 1.15)),
+    sd: Math.max(0.2, Math.min(0.27, M0.sd * 1.2)),
     lo: Math.max(0.003, M0.lo * 0.6), hi: Math.max(0.003, M0.hi * 0.5),
-    C: portrait ? Math.max(Math.min(M0.C, 60), Math.min(40, Math.max(15, M0.C * 1.1)))
-                : Math.max(Math.min(M0.C, 80), Math.min(55, Math.max(20, M0.C * 1.3 + 4))),
+    C: portrait ? Math.max(Math.min(M0.C, 60), Math.min(45, Math.max(18, M0.C * 1.2 + 3)))
+                : Math.max(Math.min(M0.C, 80), Math.min(60, Math.max(22, M0.C * 1.35 + 6))),
     // Neutralize casts, except warm light that is part of the scene.
     castRG: golden ? M0.castRG * 0.85 : 0, castYB: golden ? M0.castYB * 0.85 : 0,
   };
@@ -627,7 +632,7 @@ function autoTune(d0, w0, h0, base, info) {
       + Math.max(0, M.dk - 0.15) * 25
       + 0.6 * ((M.C - T.C) / 12) ** 2
       + ((M.castRG - T.castRG) ** 2 + (M.castYB - T.castYB) ** 2) / (0.025 ** 2);
-    for (const [k] of TUNE) p += 1.6 * (s[k] / 100) ** 2;     // prefer gentle edits
+    for (const [k] of TUNE) p += 1.0 * (s[k] / 100) ** 2;     // prefer gentle edits
     return { p, M };
   };
   let s = { ...zero }, best = evalS(s);
@@ -644,17 +649,20 @@ function autoTune(d0, w0, h0, base, info) {
     }
   }
 
+  // Make sure the result is visibly punchier when the search played it too safe.
+  if (best.M.sd < T.sd - 0.012 && s.contrast < 14) s.contrast = 14;
+  if (best.M.C < 65 && s.vibrance < 14) s.vibrance = 14;
   // Detail: sharpen soft photos, but less when noisy or a portrait; reduce noise brightened from the dark.
   const lift = Math.max(1, best.M.m / Math.max(0.03, M0.m));
   const effNoise = info.noise * Math.sqrt(lift);
   s.denoise = Math.round(Math.min(60, Math.max(0, (effNoise - 2.2) * 12)));
-  let sharp = info.lapVar < 80 ? 45 : info.lapVar < 250 ? 30 : 18;
+  let sharp = info.lapVar < 80 ? 50 : info.lapVar < 250 ? 38 : 28;
   if (effNoise > 4) sharp *= 0.55;
-  if (portrait) sharp *= 0.7;
+  if (portrait) sharp *= 0.95;
   s.sharpen = Math.round(sharp);
-  s.clarity = portrait ? 5 : night ? 4 : M0.sd < 0.17 ? 18 : 12;
+  s.clarity = portrait ? 15 : night ? 6 : M0.sd < 0.17 ? 22 : 16;
   // Pixel-level local enhancement: stronger on flat or hazy scenes, gentle on faces and night shots.
-  s.local = portrait ? 12 : night ? 15 : M0.sd < 0.15 ? 45 : M0.sd < 0.2 ? 32 : 22;
+  s.local = portrait ? 30 : night ? 18 : M0.sd < 0.15 ? 50 : M0.sd < 0.2 ? 38 : 30;
   // More pixels for low-resolution photos.
   const long = Math.max(info.fullW, info.fullH);
   const want = long < 1000 ? 4 : long < 2000 ? 2 : 1;
