@@ -157,6 +157,7 @@ legend { font: 600 11px/1 var(--font-body); letter-spacing: .12em; text-transfor
 .ctl output { font: 12px var(--font-mono); color: var(--muted); min-width: 4ch; text-align: right; }
 .ctl output.on { color: var(--accent); }
 .ctl input { grid-column: 1 / -1; width: 100%; }
+.sel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
 input[type=range] { accent-color: var(--accent); height: 22px; }
 .rail .actions .btn { flex: 1 1 45%; justify-content: center; }
 .hint { font-size: 12px; color: var(--muted); margin: 0; }
@@ -248,6 +249,7 @@ input[type=range] { accent-color: var(--accent); height: 22px; }
     </div>
     <div class="why" id="autoWhy" hidden><b id="autoScene"></b><ul id="autoList"></ul></div>
     <div id="controls"></div>
+    <div class="ctl"><label for="c_upscale">Upscale when saving</label><select id="c_upscale" class="sel"><option value="1">Off</option><option value="2">2× pixels</option><option value="4">4× pixels</option></select></div>
     <p class="hint">Drag across the photo to compare before and after. Double-tap a slider name to reset it.</p>
     <div class="actions">
       <button class="btn" id="edAuto" type="button">Auto settings</button>
@@ -265,7 +267,7 @@ input[type=range] { accent-color: var(--accent); height: 22px; }
 "use strict";
 const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
 
-function analyze(d, w, h) {
+function analyze(d, w, h, fullW = w, fullH = h) {
   const hr = new Uint32Array(256), hg = new Uint32Array(256), hb = new Uint32Array(256), hl = new Uint32Array(256);
   let n = 0, satSum = 0;
   for (let i = 0; i < d.length; i += 4) {
@@ -326,7 +328,7 @@ function analyze(d, w, h) {
 
   const base = { lo, hi, gain, k };
   const noise = estimateNoise(d, w, h);
-  const tuned = autoTune(d, w, h, base, { noise, lapVar, Lmean });
+  const tuned = autoTune(d, w, h, base, { noise, lapVar, Lmean, fullW, fullH });
   return { lo, hi, gain, k, suggested: tuned.s, reasons: tuned.reasons, scene: tuned.scene,
     stats: { dark, bright, lapVar: Math.round(lapVar), avgSat, Lmean, noise } };
 }
@@ -410,8 +412,105 @@ function toneMap(d, a, s) {
 
 }
 
-function processPixels(d, w, h, a, s) {
+/* Local enhancement: contrast-limited adaptive histogram equalization on luminance.
+   Each region of the photo gets its own tone curve, which brings out detail in skies, shade and texture. */
+function localEnhance(d, w, h, amount) {
+  const n = w * h, Y = new Uint8Array(n);
+  for (let p = 0, i = 0; p < n; p++, i += 4) Y[p] = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+  const tx = Math.max(2, Math.min(12, Math.round(w / Math.max(w, h) * 8))), ty = Math.max(2, Math.min(12, Math.round(h / Math.max(w, h) * 8)));
+  const tw = w / tx, th = h / ty;
+  const maps = new Float32Array(tx * ty * 256), hist = new Float64Array(256);
+  const clip = 1.6 + amount * 2.4;
+  for (let j = 0; j < ty; j++) for (let i = 0; i < tx; i++) {
+    hist.fill(0);
+    const x0 = Math.floor(i * tw), x1 = Math.floor((i + 1) * tw), y0 = Math.floor(j * th), y1 = Math.floor((j + 1) * th);
+    const step = Math.max(1, Math.floor(Math.min(x1 - x0, y1 - y0) / 128));
+    let cnt = 0;
+    for (let y = y0; y < y1; y += step) for (let x = x0; x < x1; x += step) { hist[Y[y * w + x]]++; cnt++; }
+    const limit = Math.max(1, clip * cnt / 256);
+    let excess = 0;
+    for (let v = 0; v < 256; v++) if (hist[v] > limit) { excess += hist[v] - limit; hist[v] = limit; }
+    const add = excess / 256;
+    let c = 0; const off = (j * tx + i) * 256;
+    for (let v = 0; v < 256; v++) { c += hist[v] + add; maps[off + v] = c / cnt * 255; }
+  }
+  for (let y = 0; y < h; y++) {
+    let fy = (y + 0.5) / th - 0.5; const j0 = Math.max(0, Math.min(ty - 1, Math.floor(fy))), j1 = Math.min(ty - 1, j0 + 1);
+    const wy = Math.max(0, Math.min(1, fy - j0));
+    for (let x = 0; x < w; x++) {
+      let fx = (x + 0.5) / tw - 0.5; const i0 = Math.max(0, Math.min(tx - 1, Math.floor(fx))), i1 = Math.min(tx - 1, i0 + 1);
+      const wx = Math.max(0, Math.min(1, fx - i0));
+      const p = y * w + x, v = Y[p];
+      const a00 = maps[(j0 * tx + i0) * 256 + v], a01 = maps[(j0 * tx + i1) * 256 + v];
+      const a10 = maps[(j1 * tx + i0) * 256 + v], a11 = maps[(j1 * tx + i1) * 256 + v];
+      const eq = (a00 * (1 - wx) + a01 * wx) * (1 - wy) + (a10 * (1 - wx) + a11 * wx) * wy;
+      const delta = (eq - v) * amount * 0.75, i = p * 4;
+      d[i] += delta; d[i + 1] += delta; d[i + 2] += delta;
+    }
+  }
+}
+
+// Lanczos-3 resize (used to upscale). Returns a new RGBA buffer.
+function lanczosWeights(src, dst) {
+  const sc = src / dst, a = 3, idx = new Int32Array(dst * 6), wt = new Float32Array(dst * 6);
+  for (let o = 0; o < dst; o++) {
+    const c = (o + 0.5) * sc - 0.5, f = Math.floor(c);
+    let sum = 0;
+    for (let k = 0; k < 6; k++) {
+      const s = f - 2 + k, x = c - s;
+      const v = x === 0 ? 1 : Math.abs(x) >= a ? 0 : (a * Math.sin(Math.PI * x) * Math.sin(Math.PI * x / a)) / (Math.PI * Math.PI * x * x);
+      idx[o * 6 + k] = s < 0 ? 0 : s >= src ? src - 1 : s; wt[o * 6 + k] = v; sum += v;
+    }
+    for (let k = 0; k < 6; k++) wt[o * 6 + k] /= sum;
+  }
+  return { idx, wt };
+}
+function resize(d, w, h, W, H) {
+  const hx = lanczosWeights(w, W), vy = lanczosWeights(h, H);
+  const mid = new Uint8ClampedArray(W * h * 4);
+  for (let y = 0; y < h; y++) {
+    const row = y * w * 4, orow = y * W * 4;
+    for (let x = 0; x < W; x++) {
+      let r = 0, g = 0, b = 0;
+      for (let k = 0; k < 6; k++) { const s = row + hx.idx[x * 6 + k] * 4, q = hx.wt[x * 6 + k]; r += d[s] * q; g += d[s + 1] * q; b += d[s + 2] * q; }
+      const o = orow + x * 4; mid[o] = r; mid[o + 1] = g; mid[o + 2] = b; mid[o + 3] = 255;
+    }
+  }
+  const out = new Uint8ClampedArray(W * H * 4), stride = W * 4;
+  for (let y = 0; y < H; y++) {
+    const orow = y * stride;
+    for (let x = 0; x < W; x++) {
+      let r = 0, g = 0, b = 0; const col = x * 4;
+      for (let k = 0; k < 6; k++) { const s = vy.idx[y * 6 + k] * stride + col, q = vy.wt[y * 6 + k]; r += mid[s] * q; g += mid[s + 1] * q; b += mid[s + 2] * q; }
+      const o = orow + col; out[o] = r; out[o + 1] = g; out[o + 2] = b; out[o + 3] = 255;
+    }
+  }
+  return out;
+}
+// Largest upscale factor (up to the requested one) that phones can still save: 16 MP and 8192 px max.
+function upscaleSize(w, h, factor) {
+  let f = factor;
+  while (f > 1 && (w * f * h * f > 16e6 || Math.max(w, h) * f > 8192)) f -= 0.5;
+  return f > 1 ? [Math.round(w * f), Math.round(h * f), f] : [w, h, 1];
+}
+
+function processPixels(d, w, h, a, s, opts = {}) {
   toneMap(d, a, s);
+  if (s.local > 0) localEnhance(d, w, h, s.local / 100);
+  let up = 1;
+  if (opts.upscale && s.upscale > 1) {
+    const [W, H, f] = upscaleSize(w, h, s.upscale);
+    if (f > 1) {
+      // Light edge-aware smoothing first so JPEG blocks and noise aren't enlarged.
+      const bl = gauss(d, w, h, 1.2);
+      for (let i = 0; i < d.length; i += 4) {
+        const diff = (Math.abs(bl[i] - d[i]) + Math.abs(bl[i + 1] - d[i + 1]) + Math.abs(bl[i + 2] - d[i + 2])) / 3;
+        const wgt = 0.6 * Math.exp(-diff * diff / 200);
+        d[i] += (bl[i] - d[i]) * wgt; d[i + 1] += (bl[i + 1] - d[i + 1]) * wgt; d[i + 2] += (bl[i + 2] - d[i + 2]) * wgt;
+      }
+      d = resize(d, w, h, W, H); w = W; h = H; up = f;
+    }
+  }
 
   // Spatial filters scale with image size so the preview matches the full-size export.
   const scale = Math.max(w, h) / 1600;
@@ -441,7 +540,8 @@ function processPixels(d, w, h, a, s) {
   };
   if (s.clarity) unsharp(Math.max(3, 22 * scale), s.clarity / 100 * 0.7, 1, 2);
   if (s.sharpen > 0) unsharp(Math.max(1, 1.3 * scale), s.sharpen / 100 * 1.6, 2);
-  return d;
+  if (up > 1) unsharp(Math.max(1, up * 0.7), 0.55, 3);   // restore edge crispness lost in upscaling
+  return { d, w, h };
 }
 
 
@@ -549,6 +649,13 @@ function autoTune(d0, w0, h0, base, info) {
   if (portrait) sharp *= 0.7;
   s.sharpen = Math.round(sharp);
   s.clarity = portrait ? 5 : night ? 4 : M0.sd < 0.17 ? 18 : 12;
+  // Pixel-level local enhancement: stronger on flat or hazy scenes, gentle on faces and night shots.
+  s.local = portrait ? 12 : night ? 15 : M0.sd < 0.15 ? 45 : M0.sd < 0.2 ? 32 : 22;
+  // More pixels for low-resolution photos.
+  const long = Math.max(info.fullW, info.fullH);
+  const want = long < 1000 ? 4 : long < 2000 ? 2 : 1;
+  const [UW, UH, uf] = upscaleSize(info.fullW, info.fullH, want);
+  s.upscale = uf > 1 ? want : 1;
 
   const reasons = [];
   const brighter = best.M.m - M0.m;
@@ -567,7 +674,9 @@ function autoTune(d0, w0, h0, base, info) {
   else if (portrait) reasons.push("People detected: kept skin tones natural");
   if (s.denoise >= 10) reasons.push("Reduced grain from low light");
   if (s.sharpen >= 35) reasons.push("Sharpened a soft photo");
-  if (!reasons.length) reasons.push("Already well exposed: light touch-up only");
+  if (s.local >= 30) reasons.push("Brought out local detail and texture");
+  else reasons.push("Enhanced local detail");
+  if (uf > 1) reasons.push(`Low resolution: upscaled ${uf}× to ${UW} × ${UH} on save`);
   return { s, reasons, scene: portrait ? "Portrait" : night ? "Night" : golden ? "Warm light" : "General" };
 }
 
@@ -577,10 +686,10 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
     try {
       const d = new Uint8ClampedArray(m.buf);
       if (m.type === "analyze") {
-        self.postMessage({ rid: m.rid, analysis: analyze(d, m.w, m.h) });
+        self.postMessage({ rid: m.rid, analysis: analyze(d, m.w, m.h, m.fullW, m.fullH) });
       } else {
-        processPixels(d, m.w, m.h, m.analysis, m.s);
-        self.postMessage({ rid: m.rid, buf: d.buffer, w: m.w, h: m.h }, [d.buffer]);
+        const r = processPixels(d, m.w, m.h, m.analysis, m.s, m.opts || {});
+        self.postMessage({ rid: m.rid, buf: r.d.buffer, w: r.w, h: r.h }, [r.d.buffer]);
       }
     } catch (err) { self.postMessage({ rid: m.rid, error: String(err && err.message || err) }); }
   };
@@ -593,14 +702,14 @@ if (typeof module !== "undefined") module.exports = { analyze, processPixels, ga
 (() => {
 const $ = id => document.getElementById(id);
 const IMG_EXT = /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif|tiff?)$/i;
-const DEFAULTS = { auto: true, strength: 100, exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0,
+const DEFAULTS = { auto: true, strength: 100, local: 0, upscale: 1, exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0,
   saturation: 0, vibrance: 0, warmth: 0, tint: 0, clarity: 0, sharpen: 0, denoise: 0, blur: 0 };
 const GROUPS = [
   ["Auto", [["strength", "Auto strength", 0, 150]]],
   ["Light", [["exposure", "Exposure", -100, 100], ["brightness", "Brightness", -100, 100], ["contrast", "Contrast", -100, 100],
              ["highlights", "Highlights", -100, 100], ["shadows", "Shadows", -100, 100]]],
   ["Color", [["saturation", "Saturation", -100, 100], ["vibrance", "Vibrance", -100, 100], ["warmth", "Warmth", -100, 100], ["tint", "Tint", -100, 100]]],
-  ["Detail", [["clarity", "Clarity", -50, 100], ["sharpen", "Sharpen", 0, 100], ["denoise", "Noise reduction", 0, 100], ["blur", "Blur", 0, 100]]],
+  ["Detail", [["local", "Local detail", 0, 100], ["clarity", "Clarity", -50, 100], ["sharpen", "Sharpen", 0, 100], ["denoise", "Noise reduction", 0, 100], ["blur", "Blur", 0, 100]]],
 ];
 const PREVIEW_MAX = 1600, THUMB_MAX = 480, EXPORT_MAX = 8192;
 
@@ -614,10 +723,10 @@ function makeWorker() {
 }
 const previewW = makeWorker(), batchW = makeWorker();
 
-async function analyzeData(id) { const buf = id.data.slice().buffer; return (await batchW({ type: "analyze", buf, w: id.width, h: id.height }, [buf])).analysis; }
-async function processData(worker, id, analysis, s) {
+async function analyzeData(id, fullW, fullH) { const buf = id.data.slice().buffer; return (await batchW({ type: "analyze", buf, w: id.width, h: id.height, fullW, fullH }, [buf])).analysis; }
+async function processData(worker, id, analysis, s, opts) {
   const buf = id.data.slice().buffer;
-  const r = await worker({ type: "process", buf, w: id.width, h: id.height, analysis, s }, [buf]);
+  const r = await worker({ type: "process", buf, w: id.width, h: id.height, analysis, s, opts }, [buf]);
   return new ImageData(new Uint8ClampedArray(r.buf), r.w, r.h);
 }
 
@@ -631,7 +740,7 @@ async function decode(file, maxDim) {
     cleanup = () => URL.revokeObjectURL(url);
   }
   const W = src.width || src.naturalWidth, H = src.height || src.naturalHeight;
-  const sc = Math.min(1, maxDim / Math.max(W, H));
+  const sc = Math.min(1, maxDim / Math.max(W, H), Math.sqrt(16e6 / (W * H)));
   const w = Math.max(1, Math.round(W * sc)), h = Math.max(1, Math.round(H * sc));
   const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
   const ctx = cv.getContext("2d", { willReadFrequently: true });
@@ -686,7 +795,7 @@ async function addFilesNow(list) {
     try {
       const { data, fullW, fullH } = await decode(it.file, THUMB_MAX);
       it.thumbSrc = data; it.w = fullW; it.h = fullH;
-      it.analysis = await analyzeData(data);
+      it.analysis = await analyzeData(data, fullW, fullH);
       it.s = settingsFor(it.analysis, $("autoNew").checked);
       it.status = "ready";
       await updateThumb(it);
@@ -717,7 +826,7 @@ function renderCard(it) {
     $("grid").appendChild(el);
   }
   el.querySelector(".name").textContent = it.name; el.querySelector(".name").title = it.name;
-  el.querySelector(".dim").textContent = it.w ? `${it.w} × ${it.h}` : it.status === "error" ? "Couldn't open" : "Waiting…";
+  el.querySelector(".dim").textContent = it.w ? (it.s && it.s.upscale > 1 ? `${it.w} × ${it.h} → ${it.s.upscale}×` : `${it.w} × ${it.h}`) : it.status === "error" ? "Couldn't open" : "Waiting…";
   const th = el.querySelector(".thumb");
   if (it.status === "error") th.innerHTML = `<span class="chip err">Unsupported</span>`;
   else if (it.thumbURL) th.innerHTML = `<img alt="" src="${it.thumbURL}">${it.s.auto ? '<span class="chip">AUTO</span>' : ""}`;
@@ -749,7 +858,7 @@ function outType(it) {
 const EXT = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 async function exportItem(it) {
   const { data } = await decode(it.file, EXPORT_MAX);
-  const out = await processData(batchW, data, it.analysis, it.s);
+  const out = await processData(batchW, data, it.analysis, it.s, { upscale: true });
   const type = outType(it);
   const blob = await canvasBlob(toCanvas(out), type, +$("quality").value / 100);
   const base = it.name.replace(/\.[^.]+$/, "");
@@ -808,7 +917,7 @@ const ed = { it: null, src: null, busy: false, dirty: false, split: 0.5 };
 const KEYS = GROUPS.flatMap(g => g[1].map(c => c[0]));
 function syncControls() {
   const s = ed.it.s;
-  $("c_auto").checked = s.auto; $("grpAuto").hidden = !s.auto;
+  $("c_auto").checked = s.auto; $("grpAuto").hidden = !s.auto; $("c_upscale").value = String(s.upscale || 1);
   const a = ed.it.analysis;
   $("autoWhy").hidden = !(s.auto && a && a.reasons);
   if (a && a.reasons) {
@@ -826,6 +935,7 @@ $("rail").addEventListener("input", e => {
   if (!ed.it) return;
   const k = e.target.id.slice(2);
   if (k === "auto") ed.it.s.auto = e.target.checked;
+  else if (k === "upscale") { ed.it.s.upscale = +e.target.value; renderCard(ed.it); return; }
   else if (KEYS.includes(k)) ed.it.s[k] = +e.target.value;
   else return;
   syncControls(); schedule();
