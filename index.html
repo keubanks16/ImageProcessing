@@ -1,0 +1,837 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Darkroom Image Enhancer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="theme-color" content="#14171c">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;700&family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+/* Layout: sticky toolbar over a contact-sheet grid; full-screen editor with the photo on top and a control rail beside (desktop) or below (phone). */
+:root {
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface-2: #e8eaee;
+  --line: #d4d8df;
+  --fg: #1a1d23;
+  --muted: #5f6672;
+  --accent: #c2410c;          /* safelight amber-red */
+  --accent-soft: #fde7d9;
+  --accent-fg: #ffffff;
+  --good: #15803d;
+  --bad: #b91c1c;
+  --stage: #0f1115;
+  --font-display: "Sora", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Manrope", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111317; --surface: #1a1d23; --surface-2: #23272f; --line: #313641;
+    --fg: #e9ebef; --muted: #9aa1ad; --accent: #f08a4b; --accent-soft: #3a2418; --accent-fg: #1a0e07;
+    --good: #4ade80; --bad: #f87171; --stage: #08090b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111317; --surface: #1a1d23; --surface-2: #23272f; --line: #313641;
+  --fg: #e9ebef; --muted: #9aa1ad; --accent: #f08a4b; --accent-soft: #3a2418; --accent-fg: #1a0e07;
+  --good: #4ade80; --bad: #f87171; --stage: #08090b; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); max-width: 1280px; margin: 0 auto; }
+
+header.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+header.bar .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 12px; }
+.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; }
+.brand h1 { font: 700 20px/1 var(--font-display); letter-spacing: -0.01em; margin: 0; }
+.brand h1 span { color: var(--accent); }
+.brand small { color: var(--muted); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; font-weight: 600; font-size: 14px;
+  min-height: 38px; white-space: nowrap;
+}
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn svg { width: 16px; height: 16px; flex: none; }
+
+.settings { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding-block: 14px; color: var(--muted); font-size: 13px; }
+.settings label { display: inline-flex; align-items: center; gap: 8px; }
+.settings select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+.settings input[type=range] { width: 110px; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.drop {
+  margin-top: 8px; border: 2px dashed var(--line); border-radius: 14px; background: var(--surface);
+  padding: 40px 20px; text-align: center; transition: border-color .15s, background .15s;
+}
+.drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop h2 { font: 700 clamp(20px, 4vw, 28px)/1.2 var(--font-display); margin: 0 0 8px; text-wrap: balance; }
+.drop p { color: var(--muted); margin: 0 auto 18px; max-width: 52ch; }
+.drop .actions { justify-content: center; }
+.drop.compact { padding: 16px 20px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; text-align: left; }
+.drop.compact h2 { font-size: 16px; margin: 0; }
+.drop.compact p { display: none; }
+
+.progress { height: 4px; background: var(--surface-2); border-radius: 4px; overflow: hidden; margin-top: 14px; }
+.progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.status { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 20px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; padding-block: 18px 60px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.thumb { position: relative; aspect-ratio: 4 / 3; background: var(--stage); display: grid; place-items: center; cursor: pointer; border: 0; padding: 0; width: 100%; max-width: 100%; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb .spin { width: 22px; height: 22px; border: 2px solid #ffffff33; border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.chip { position: absolute; left: 8px; top: 8px; font: 500 11px/1 var(--font-mono); letter-spacing: .04em; padding: 4px 6px; border-radius: 4px; background: #000000a6; color: #fff; }
+.chip.err { background: var(--bad); }
+.meta { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+.name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dim { font: 12px var(--font-mono); color: var(--muted); }
+.row { display: flex; gap: 6px; }
+.row .btn { padding: 6px 8px; min-height: 32px; font-size: 13px; flex: 1; justify-content: center; }
+
+/* Editor */
+.editor { position: fixed; inset: 0; z-index: 20; background: var(--bg); display: grid; grid-template-columns: 1fr 340px; grid-template-rows: auto 1fr; }
+.editor[hidden] { display: none !important; }
+.ed-top {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+  padding: calc(8px + env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px));
+}
+.ed-top .title { font-weight: 700; margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 120px; }
+.stage { position: relative; background: var(--stage); overflow: hidden; min-height: 0; display: grid; place-items: center; touch-action: none; user-select: none; -webkit-user-select: none; }
+.compare { position: relative; max-width: 100%; max-height: 100%; }
+.compare canvas { display: block; max-width: 100%; max-height: calc(100vh - 140px); width: auto; height: auto; }
+.compare canvas.orig { position: absolute; inset: 0; width: 100%; height: 100%; }
+.split { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; box-shadow: 0 0 0 1px #0006; pointer-events: none; }
+.split::after { content: ""; position: absolute; top: 50%; left: 50%; width: 30px; height: 30px; transform: translate(-50%, -50%); border-radius: 50%; background: #fff; box-shadow: 0 1px 6px #0008; }
+.tag { position: absolute; top: 10px; font: 500 11px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; background: #000a; color: #fff; padding: 5px 7px; border-radius: 4px; pointer-events: none; }
+.tag.l { left: 10px; } .tag.r { right: 10px; }
+.busy { position: absolute; right: 12px; bottom: 12px; }
+
+.rail { background: var(--surface); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px max(16px, env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)) 16px; display: flex; flex-direction: column; gap: 18px; min-height: 0; }
+.toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border-radius: var(--r); background: var(--accent-soft); }
+.toggle b { display: block; font-size: 14px; }
+.toggle span { font-size: 12px; color: var(--muted); }
+.switch { position: relative; width: 44px; height: 26px; flex: none; }
+.switch input { opacity: 0; width: 100%; height: 100%; margin: 0; position: absolute; cursor: pointer; }
+.switch i { position: absolute; inset: 0; border-radius: 13px; background: var(--line); transition: background .15s; pointer-events: none; }
+.switch i::after { content: ""; position: absolute; left: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px #0004; }
+.switch input:checked + i { background: var(--accent); }
+.switch input:checked + i::after { transform: translateX(18px); }
+.switch input:focus-visible + i { outline: 2px solid var(--accent); outline-offset: 2px; }
+fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+legend { font: 600 11px/1 var(--font-body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); padding: 0; margin-bottom: 10px; }
+.ctl { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; }
+.ctl label { font-size: 13px; font-weight: 600; cursor: default; }
+.ctl output { font: 12px var(--font-mono); color: var(--muted); min-width: 4ch; text-align: right; }
+.ctl output.on { color: var(--accent); }
+.ctl input { grid-column: 1 / -1; width: 100%; }
+input[type=range] { accent-color: var(--accent); height: 22px; }
+.rail .actions .btn { flex: 1 1 45%; justify-content: center; }
+.hint { font-size: 12px; color: var(--muted); margin: 0; }
+
+.toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 14px; z-index: 40; max-width: calc(100% - 32px); box-shadow: 0 6px 20px #0005; }
+
+@media (max-width: 820px) {
+  .editor { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 52vh) 1fr; }
+  .compare canvas { max-height: 52vh; }
+  .rail { border-left: 0; border-top: 1px solid var(--line); padding-left: max(16px, env(safe-area-inset-left, 0px)); }
+}
+@media (max-width: 520px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .brand small { display: none; }
+  .ed-top .btn .lbl { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation-duration: .01ms !important; } }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <div class="brand"><h1>Dark<span>room</span></h1><small>Auto photo enhancer</small></div>
+    <div class="actions">
+      <button class="btn" id="btnAdd" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Add</button>
+      <button class="btn" id="btnClear" type="button" disabled>Clear</button>
+      <button class="btn primary" id="btnZip" type="button" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>Download all</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="settings">
+    <label><span>Auto-enhance new photos</span><span class="switch"><input type="checkbox" id="autoNew" checked><i></i></span></label>
+    <label for="fmt">Save as
+      <select id="fmt">
+        <option value="orig">Same as original</option>
+        <option value="image/jpeg">JPEG</option>
+        <option value="image/png">PNG</option>
+        <option value="image/webp">WebP</option>
+      </select>
+    </label>
+    <label for="quality">Quality <input type="range" id="quality" min="60" max="100" value="92"> <span class="mono" id="qualityVal">92</span></label>
+  </div>
+
+  <section class="drop" id="drop">
+    <div>
+      <h2>Drop photos, folders or a ZIP here</h2>
+      <p>Every photo gets automatic levels, white balance, exposure, shadow and highlight recovery, color and sharpening. Fine-tune any of it, then save one at a time or all together as a ZIP. Everything runs in your browser; nothing is uploaded.</p>
+    </div>
+    <div class="actions">
+      <button class="btn primary" type="button" data-pick="files">Choose photos</button>
+      <button class="btn" type="button" data-pick="zip">Choose ZIP</button>
+      <button class="btn" type="button" data-pick="folder">Choose folder</button>
+    </div>
+  </section>
+  <div class="progress" id="prog" hidden><i></i></div>
+  <div class="status" id="status" aria-live="polite"></div>
+
+  <section class="grid" id="grid"></section>
+
+  <input type="file" id="inFiles" accept="image/*,.heic,.heif,.zip,application/zip" multiple hidden>
+  <input type="file" id="inZip" accept=".zip,application/zip,application/x-zip-compressed" hidden>
+  <input type="file" id="inFolder" webkitdirectory directory multiple hidden>
+</main>
+
+<section class="editor" id="editor" hidden aria-label="Photo editor">
+  <div class="ed-top">
+    <button class="btn ghost" id="edClose" type="button" aria-label="Back to all photos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg><span class="lbl">All photos</span></button>
+    <div class="title" id="edTitle"></div>
+    <button class="btn" id="edPrev" type="button" aria-label="Previous photo">‹</button>
+    <button class="btn" id="edNext" type="button" aria-label="Next photo">›</button>
+    <button class="btn primary" id="edSave" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg><span class="lbl">Save</span></button>
+  </div>
+  <div class="stage" id="stage">
+    <div class="compare" id="compare">
+      <canvas id="cvProc"></canvas>
+      <canvas id="cvOrig" class="orig"></canvas>
+      <div class="split" id="split"></div>
+      <span class="tag l">Before</span><span class="tag r">After</span>
+    </div>
+    <div class="spin busy" id="edBusy" hidden></div>
+  </div>
+  <aside class="rail" id="rail">
+    <div class="toggle">
+      <div><b>Auto-enhance</b><span>Levels, white balance and exposure</span></div>
+      <span class="switch"><input type="checkbox" id="c_auto" aria-label="Auto-enhance"><i></i></span>
+    </div>
+    <div id="controls"></div>
+    <p class="hint">Drag across the photo to compare before and after. Double-tap a slider name to reset it.</p>
+    <div class="actions">
+      <button class="btn" id="edAuto" type="button">Re-run auto</button>
+      <button class="btn" id="edReset" type="button">Reset all</button>
+      <button class="btn" id="edApplyAll" type="button">Use on all photos</button>
+      <button class="btn" id="edShare" type="button" hidden>Share / Save to Photos</button>
+    </div>
+  </aside>
+</section>
+
+<div class="toast" id="toast" hidden></div>
+
+<!-- Processing engine: runs inside a Web Worker so the page stays responsive. -->
+<script type="text/plain" id="engine-src">
+"use strict";
+const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
+
+function analyze(d, w, h) {
+  const hr = new Uint32Array(256), hg = new Uint32Array(256), hb = new Uint32Array(256), hl = new Uint32Array(256);
+  let n = 0, satSum = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] < 8) continue;
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    hr[r]++; hg[g]++; hb[b]++;
+    hl[(r * 77 + g * 150 + b * 29) >> 8]++;
+    const mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    const mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    satSum += mx - mn; n++;
+  }
+  if (!n) n = 1;
+  const pct = (hist, p) => { const t = p * n; let c = 0; for (let v = 0; v < 256; v++) { c += hist[v]; if (c >= t) return v; } return 255; };
+  const hists = [hr, hg, hb];
+  const lo = hists.map(H => pct(H, 0.004)), hi = hists.map(H => pct(H, 0.996));
+  for (let c = 0; c < 3; c++) {
+    // Don't stretch nearly flat channels (solid backgrounds, documents) or exaggerate tiny ranges.
+    if (hi[c] - lo[c] < 24) { lo[c] = 0; hi[c] = 255; continue; }
+    // Cap the stretch at about 2x so low-contrast scenes aren't blown out.
+    if (hi[c] - lo[c] < 128) { const mid = (hi[c] + lo[c]) / 2; lo[c] = Math.max(0, Math.round(mid - 64)); hi[c] = Math.min(255, lo[c] + 128); }
+  }
+  // Keep channel stretches from diverging too much (avoids strong color casts on unusual scenes).
+  const loAvg = (lo[0] + lo[1] + lo[2]) / 3, hiAvg = (hi[0] + hi[1] + hi[2]) / 3;
+  for (let c = 0; c < 3; c++) {
+    lo[c] = Math.round(loAvg + (lo[c] - loAvg) * 0.6);
+    hi[c] = Math.round(hiAvg + (hi[c] - hiAvg) * 0.6);
+  }
+  const means = hists.map((H, c) => {
+    let s = 0; const span = hi[c] - lo[c];
+    for (let v = 0; v < 256; v++) s += H[v] * clamp01((v - lo[c]) / span);
+    return s / n;
+  });
+  const gray = (means[0] + means[1] + means[2]) / 3;
+  const gain = means.map(m => {
+    const g = m > 0.01 ? gray / m : 1;
+    return 1 + 0.55 * (Math.min(1.18, Math.max(0.85, g)) - 1);
+  });
+  const Lmean = Math.max(0.03, Math.min(0.97, 0.299 * means[0] * gain[0] + 0.587 * means[1] * gain[1] + 0.114 * means[2] * gain[2]));
+  let k = Math.log(0.46) / Math.log(Lmean);
+  k = Math.min(1.45, Math.max(0.6, k));
+
+  let dark = 0, bright = 0;
+  for (let v = 0; v < 40; v++) dark += hl[v];
+  for (let v = 236; v < 256; v++) bright += hl[v];
+  dark /= n; bright /= n;
+
+  // Sharpness estimate: variance of the Laplacian on luminance.
+  let lsum = 0, lsq = 0, lc = 0;
+  const L = (x, y) => { const i = (y * w + x) * 4; return (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8; };
+  const step = Math.max(1, Math.floor(Math.min(w, h) / 256));
+  for (let y = 1; y < h - 1; y += step) for (let x = 1; x < w - 1; x += step) {
+    const v = 4 * L(x, y) - L(x - 1, y) - L(x + 1, y) - L(x, y - 1) - L(x, y + 1);
+    lsum += v; lsq += v * v; lc++;
+  }
+  const lapVar = lc ? lsq / lc - (lsum / lc) ** 2 : 0;
+  const avgSat = satSum / n / 255;
+  const spread = (pct(hl, 0.95) - pct(hl, 0.05)) / 255;
+
+  const suggested = {
+    shadows: dark > 0.3 ? 40 : dark > 0.18 ? 25 : dark > 0.1 ? 12 : 0,
+    highlights: bright > 0.12 ? -40 : bright > 0.06 ? -25 : bright > 0.03 ? -12 : 0,
+    contrast: spread < 0.45 ? 15 : spread < 0.6 ? 8 : 0,
+    vibrance: avgSat < 0.1 ? 30 : avgSat < 0.2 ? 20 : 10,
+    clarity: 12,
+    sharpen: lapVar < 80 ? 45 : lapVar < 250 ? 30 : 18,
+  };
+  return { lo, hi, gain, k, suggested, stats: { dark, bright, lapVar: Math.round(lapVar), avgSat, Lmean } };
+}
+
+function blurH(s, t, w, h, r) {
+  const n = 2 * r + 1, last = w - 1;
+  for (let y = 0; y < h; y++) {
+    const row = y * w * 4;
+    for (let c = 0; c < 3; c++) {
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += s[row + (k < 0 ? 0 : k > last ? last : k) * 4 + c];
+      for (let x = 0; x < w; x++) {
+        t[row + x * 4 + c] = acc / n;
+        const xo = x - r < 0 ? 0 : x - r;
+        const xi = x + r + 1 > last ? last : x + r + 1;
+        acc += s[row + xi * 4 + c] - s[row + xo * 4 + c];
+      }
+    }
+  }
+}
+function blurV(s, t, w, h, r) {
+  const n = 2 * r + 1, last = h - 1, stride = w * 4;
+  for (let x = 0; x < w; x++) {
+    for (let c = 0; c < 3; c++) {
+      const col = x * 4 + c;
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += s[(k < 0 ? 0 : k > last ? last : k) * stride + col];
+      for (let y = 0; y < h; y++) {
+        t[y * stride + col] = acc / n;
+        const yo = y - r < 0 ? 0 : y - r;
+        const yi = y + r + 1 > last ? last : y + r + 1;
+        acc += s[yi * stride + col] - s[yo * stride + col];
+      }
+    }
+  }
+}
+// Approximate Gaussian blur of the RGB channels (three box passes).
+function gauss(src, w, h, radius, passes = 3) {
+  const r = Math.max(1, Math.round(radius * (passes === 3 ? 0.58 : 0.7)));
+  const A = new Uint8ClampedArray(src), B = new Uint8ClampedArray(src.length);
+  for (let p = 0; p < passes; p++) { blurH(A, B, w, h, r); blurV(B, A, w, h, r); }
+  return A;
+}
+
+function processPixels(d, w, h, a, s) {
+  const st = s.auto && a ? s.strength / 100 : 0;
+  const ev = Math.pow(2, (s.exposure / 100) * 1.5);
+  const bri = Math.pow(2, -s.brightness / 100);
+  const k = (1 + st * ((a ? a.k : 1) - 1)) * bri;
+  const con = 1 + s.contrast / 100;
+  const sh = s.shadows / 100 * 0.9, hl = s.highlights / 100 * 0.9;
+  const tone = [1 + s.warmth / 100 * 0.12, 1 - s.tint / 100 * 0.1, 1 - s.warmth / 100 * 0.12];
+  const luts = [new Float32Array(256), new Float32Array(256), new Float32Array(256)];
+  for (let c = 0; c < 3; c++) {
+    const lo = a ? a.lo[c] : 0, hi = a ? a.hi[c] : 255, gain = a ? a.gain[c] : 1;
+    for (let v = 0; v < 256; v++) {
+      let x = v / 255;
+      x += st * (clamp01((v - lo) / (hi - lo)) - x);
+      x *= (1 + st * (gain - 1)) * tone[c] * ev;
+      x = Math.pow(clamp01(x), k);
+      x += sh * x * (1 - x) * (1 - x) * 2.2;
+      x += hl * x * x * (1 - x) * 2.2;
+      x = 0.5 + (x - 0.5) * con;
+      luts[c][v] = clamp01(x) * 255;
+    }
+  }
+  const [LR, LG, LB] = luts;
+  const sat = 1 + s.saturation / 100, vib = s.vibrance / 100;
+  const doSat = sat !== 1 || vib !== 0;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = LR[d[i]], g = LG[d[i + 1]], b = LB[d[i + 2]];
+    if (doSat) {
+      const L = 0.299 * r + 0.587 * g + 0.114 * b;
+      const mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      const mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      const f = sat * (1 + vib * (1 - (mx - mn) / 255));
+      r = L + (r - L) * f; g = L + (g - L) * f; b = L + (b - L) * f;
+    }
+    d[i] = r; d[i + 1] = g; d[i + 2] = b;
+  }
+
+  // Spatial filters scale with image size so the preview matches the full-size export.
+  const scale = Math.max(w, h) / 1600;
+  if (s.denoise > 0) {
+    const amt = s.denoise / 100;
+    const bl = gauss(d, w, h, Math.max(1.5, (1.5 + amt * 2.5) * scale));
+    const alpha = amt * 0.9, sig = 10 + amt * 22, inv = 1 / (2 * sig * sig);
+    for (let i = 0; i < d.length; i += 4) {
+      const dr = bl[i] - d[i], dg = bl[i + 1] - d[i + 1], db = bl[i + 2] - d[i + 2];
+      const diff = (Math.abs(dr) + Math.abs(dg) + Math.abs(db)) / 3;
+      const wgt = alpha * Math.exp(-diff * diff * inv);   // edge-aware: smooth flat areas, keep edges
+      d[i] += dr * wgt; d[i + 1] += dg * wgt; d[i + 2] += db * wgt;
+    }
+  }
+  if (s.blur > 0) {
+    const bl = gauss(d, w, h, Math.max(1, (s.blur / 100) * 14 * scale));
+    for (let i = 0; i < d.length; i += 4) { d[i] = bl[i]; d[i + 1] = bl[i + 1]; d[i + 2] = bl[i + 2]; }
+  }
+  const unsharp = (radius, amount, thresh, passes) => {
+    const bl = gauss(d, w, h, radius, passes);
+    for (let i = 0; i < d.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const diff = d[i + c] - bl[i + c];
+        if (diff > thresh || diff < -thresh) d[i + c] = d[i + c] + diff * amount;
+      }
+    }
+  };
+  if (s.clarity) unsharp(Math.max(3, 22 * scale), s.clarity / 100 * 0.7, 1, 2);
+  if (s.sharpen > 0) unsharp(Math.max(1, 1.3 * scale), s.sharpen / 100 * 1.6, 2);
+  return d;
+}
+
+if (typeof self !== "undefined" && typeof self.postMessage === "function" && typeof window === "undefined") {
+  self.onmessage = e => {
+    const m = e.data;
+    try {
+      const d = new Uint8ClampedArray(m.buf);
+      if (m.type === "analyze") {
+        self.postMessage({ rid: m.rid, analysis: analyze(d, m.w, m.h) });
+      } else {
+        processPixels(d, m.w, m.h, m.analysis, m.s);
+        self.postMessage({ rid: m.rid, buf: d.buffer, w: m.w, h: m.h }, [d.buffer]);
+      }
+    } catch (err) { self.postMessage({ rid: m.rid, error: String(err && err.message || err) }); }
+  };
+}
+if (typeof module !== "undefined") module.exports = { analyze, processPixels, gauss };
+</script>
+
+<script>
+"use strict";
+(() => {
+const $ = id => document.getElementById(id);
+const IMG_EXT = /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif|tiff?)$/i;
+const DEFAULTS = { auto: true, strength: 100, exposure: 0, brightness: 0, contrast: 0, highlights: 0, shadows: 0,
+  saturation: 0, vibrance: 0, warmth: 0, tint: 0, clarity: 0, sharpen: 0, denoise: 0, blur: 0 };
+const GROUPS = [
+  ["Auto", [["strength", "Auto strength", 0, 150]]],
+  ["Light", [["exposure", "Exposure", -100, 100], ["brightness", "Brightness", -100, 100], ["contrast", "Contrast", -100, 100],
+             ["highlights", "Highlights", -100, 100], ["shadows", "Shadows", -100, 100]]],
+  ["Color", [["saturation", "Saturation", -100, 100], ["vibrance", "Vibrance", -100, 100], ["warmth", "Warmth", -100, 100], ["tint", "Tint", -100, 100]]],
+  ["Detail", [["clarity", "Clarity", -50, 100], ["sharpen", "Sharpen", 0, 100], ["denoise", "Noise reduction", 0, 100], ["blur", "Blur", 0, 100]]],
+];
+const PREVIEW_MAX = 1600, THUMB_MAX = 480, EXPORT_MAX = 8192;
+
+/* ---------- Workers ---------- */
+const engineURL = URL.createObjectURL(new Blob([$("engine-src").textContent], { type: "text/javascript" }));
+function makeWorker() {
+  const w = new Worker(engineURL), pending = new Map(); let seq = 0;
+  w.onmessage = e => { const p = pending.get(e.data.rid); if (!p) return; pending.delete(e.data.rid); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); };
+  w.onerror = e => { for (const p of pending.values()) p.reject(new Error(e.message || "Processing failed")); pending.clear(); };
+  return (msg, transfer) => new Promise((resolve, reject) => { const rid = ++seq; pending.set(rid, { resolve, reject }); w.postMessage({ ...msg, rid }, transfer); });
+}
+const previewW = makeWorker(), batchW = makeWorker();
+
+async function analyzeData(id) { const buf = id.data.slice().buffer; return (await batchW({ type: "analyze", buf, w: id.width, h: id.height }, [buf])).analysis; }
+async function processData(worker, id, analysis, s) {
+  const buf = id.data.slice().buffer;
+  const r = await worker({ type: "process", buf, w: id.width, h: id.height, analysis, s }, [buf]);
+  return new ImageData(new Uint8ClampedArray(r.buf), r.w, r.h);
+}
+
+/* ---------- Decoding ---------- */
+async function decode(file, maxDim) {
+  let src, cleanup = () => {};
+  try { src = await createImageBitmap(file, { imageOrientation: "from-image" }); cleanup = () => src.close && src.close(); }
+  catch {
+    const url = URL.createObjectURL(file);
+    src = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error("This browser can't open this file type")); im.src = url; });
+    cleanup = () => URL.revokeObjectURL(url);
+  }
+  const W = src.width || src.naturalWidth, H = src.height || src.naturalHeight;
+  const sc = Math.min(1, maxDim / Math.max(W, H));
+  const w = Math.max(1, Math.round(W * sc)), h = Math.max(1, Math.round(H * sc));
+  const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(src, 0, 0, w, h);
+  cleanup();
+  return { data: ctx.getImageData(0, 0, w, h), fullW: W, fullH: H };
+}
+function toCanvas(id) { const cv = document.createElement("canvas"); cv.width = id.width; cv.height = id.height; cv.getContext("2d").putImageData(id, 0, 0); return cv; }
+const canvasBlob = (cv, type, q) => new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error("Couldn't encode image")), type, q));
+
+/* ---------- State ---------- */
+const items = []; let uid = 0;
+const settingsFor = (analysis, auto) => auto && analysis ? { ...DEFAULTS, ...analysis.suggested, auto: true } : { ...DEFAULTS, auto: false };
+
+/* ---------- Adding files ---------- */
+function guessType(name) {
+  const e = name.split(".").pop().toLowerCase();
+  return ({ jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif", bmp: "image/bmp", avif: "image/avif", heic: "image/heic", heif: "image/heif", tif: "image/tiff", tiff: "image/tiff" })[e] || "application/octet-stream";
+}
+async function expand(files) {
+  const out = [];
+  for (const f of files) {
+    if (/\.zip$/i.test(f.name) || /zip/.test(f.type)) {
+      setStatus(`Opening ${f.name}…`);
+      try {
+        const zip = await JSZip.loadAsync(f);
+        const entries = Object.values(zip.files).filter(z => !z.dir && IMG_EXT.test(z.name) && !/(^|\/)(__MACOSX|\.)/.test(z.name));
+        for (const z of entries) {
+          const blob = await z.async("blob");
+          out.push(new File([blob], z.name.split("/").pop(), { type: guessType(z.name) }));
+        }
+        if (!entries.length) toast(`No photos found inside ${f.name}`);
+      } catch { toast(`${f.name} isn't a readable ZIP file`); }
+    } else if (f.type.startsWith("image/") || IMG_EXT.test(f.name)) out.push(f);
+  }
+  return out;
+}
+let adding = Promise.resolve();
+function addFiles(list) { adding = adding.then(() => addFilesNow([...list])); }
+async function addFilesNow(list) {
+  const files = await expand(list);
+  if (!files.length) { setStatus(""); return; }
+  const fresh = files.map(file => {
+    const it = { id: ++uid, file, name: file.name, status: "queued", analysis: null, s: null, thumbSrc: null, thumbURL: null, w: 0, h: 0 };
+    items.push(it); renderCard(it); return it;
+  });
+  refreshChrome();
+  let done = 0;
+  for (const it of fresh) {
+    setProgress(done / fresh.length, `Enhancing ${done + 1} of ${fresh.length}…`);
+    try {
+      const { data, fullW, fullH } = await decode(it.file, THUMB_MAX);
+      it.thumbSrc = data; it.w = fullW; it.h = fullH;
+      it.analysis = await analyzeData(data);
+      it.s = settingsFor(it.analysis, $("autoNew").checked);
+      it.status = "ready";
+      await updateThumb(it);
+    } catch (e) { it.status = "error"; it.error = e.message; renderCard(it); }
+    done++;
+  }
+  setProgress(1, `${fresh.length} photo${fresh.length > 1 ? "s" : ""} enhanced. Tap one to fine-tune.`);
+  setTimeout(() => setProgress(null), 600);
+  refreshChrome();
+}
+async function updateThumb(it) {
+  if (!it.thumbSrc) return;
+  const out = await processData(batchW, it.thumbSrc, it.analysis, it.s);
+  const blob = await canvasBlob(toCanvas(out), "image/jpeg", 0.85);
+  if (it.thumbURL) URL.revokeObjectURL(it.thumbURL);
+  it.thumbURL = URL.createObjectURL(blob);
+  renderCard(it);
+}
+
+/* ---------- Grid ---------- */
+function renderCard(it) {
+  let el = document.querySelector(`[data-id="${it.id}"]`);
+  if (!el) {
+    el = document.createElement("article"); el.className = "card"; el.dataset.id = it.id;
+    el.innerHTML = `<button class="thumb" type="button" aria-label="Edit"></button>
+      <div class="meta"><div class="name"></div><div class="dim"></div>
+      <div class="row"><button class="btn" type="button" data-act="edit">Edit</button><button class="btn" type="button" data-act="save">Save</button><button class="btn" type="button" data-act="del" aria-label="Remove">✕</button></div></div>`;
+    $("grid").appendChild(el);
+  }
+  el.querySelector(".name").textContent = it.name; el.querySelector(".name").title = it.name;
+  el.querySelector(".dim").textContent = it.w ? `${it.w} × ${it.h}` : it.status === "error" ? "Couldn't open" : "Waiting…";
+  const th = el.querySelector(".thumb");
+  if (it.status === "error") th.innerHTML = `<span class="chip err">Unsupported</span>`;
+  else if (it.thumbURL) th.innerHTML = `<img alt="" src="${it.thumbURL}">${it.s.auto ? '<span class="chip">AUTO</span>' : ""}`;
+  else th.innerHTML = `<div class="spin"></div>`;
+  el.querySelectorAll("[data-act=edit],[data-act=save],.thumb").forEach(b => b.disabled = it.status !== "ready");
+}
+$("grid").addEventListener("click", e => {
+  const card = e.target.closest(".card"); if (!card) return;
+  const it = items.find(x => x.id == card.dataset.id); if (!it) return;
+  const act = e.target.closest("[data-act]")?.dataset.act || (e.target.closest(".thumb") ? "edit" : null);
+  if (act === "edit" && it.status === "ready") openEditor(it);
+  else if (act === "save" && it.status === "ready") saveOne(it);
+  else if (act === "del") { items.splice(items.indexOf(it), 1); if (it.thumbURL) URL.revokeObjectURL(it.thumbURL); card.remove(); refreshChrome(); }
+});
+function refreshChrome() {
+  const ready = items.filter(i => i.status === "ready").length;
+  $("btnZip").disabled = !ready; $("btnClear").disabled = !items.length;
+  $("btnZip").lastChild.textContent = ready > 1 ? `Download all (${ready})` : "Download all";
+  $("drop").classList.toggle("compact", items.length > 0);
+  $("drop").querySelector("h2").textContent = items.length ? "Add more photos" : "Drop photos, folders or a ZIP here";
+}
+
+/* ---------- Export ---------- */
+function outType(it) {
+  const f = $("fmt").value; if (f !== "orig") return f;
+  const t = it.file.type;
+  return t === "image/png" || t === "image/webp" ? t : "image/jpeg";
+}
+const EXT = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+async function exportItem(it) {
+  const { data } = await decode(it.file, EXPORT_MAX);
+  const out = await processData(batchW, data, it.analysis, it.s);
+  const type = outType(it);
+  const blob = await canvasBlob(toCanvas(out), type, +$("quality").value / 100);
+  const base = it.name.replace(/\.[^.]+$/, "");
+  return { blob, name: `${base}_enhanced.${EXT[blob.type] || EXT[type] || "jpg"}` };
+}
+function download(blob, name) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
+async function saveOne(it) {
+  setStatus(`Saving ${it.name} at full size…`);
+  try { const { blob, name } = await exportItem(it); download(blob, name); setStatus(`Saved ${name}`); }
+  catch (e) { toast(`Couldn't save ${it.name}: ${e.message}`); setStatus(""); }
+}
+$("btnZip").addEventListener("click", async () => {
+  const list = items.filter(i => i.status === "ready"); if (!list.length) return;
+  $("btnZip").disabled = true;
+  const zip = new JSZip(), used = new Set();
+  for (let i = 0; i < list.length; i++) {
+    setProgress(i / list.length, `Processing ${i + 1} of ${list.length} at full size…`);
+    try {
+      let { blob, name } = await exportItem(list[i]);
+      let n = 2, base = name; while (used.has(name)) name = base.replace(/(\.[^.]+)$/, `_${n++}$1`);
+      used.add(name); zip.file(name, blob);
+    } catch (e) { toast(`Skipped ${list[i].name}: ${e.message}`); }
+    await new Promise(r => setTimeout(r));
+  }
+  setProgress(0.98, "Building ZIP…");
+  const out = await zip.generateAsync({ type: "blob", compression: "STORE" });
+  download(out, `enhanced_photos_${new Date().toISOString().slice(0, 10)}.zip`);
+  setProgress(null); setStatus(`Downloaded ${used.size} photo${used.size === 1 ? "" : "s"} as a ZIP.`);
+  refreshChrome();
+});
+$("btnClear").addEventListener("click", () => {
+  items.forEach(i => i.thumbURL && URL.revokeObjectURL(i.thumbURL)); items.length = 0;
+  $("grid").innerHTML = ""; setStatus(""); refreshChrome();
+});
+
+/* ---------- Editor ---------- */
+const ed = { it: null, src: null, busy: false, dirty: false, split: 0.5 };
+(function buildControls() {
+  const host = $("controls");
+  for (const [g, ctls] of GROUPS) {
+    const fs = document.createElement("fieldset"); fs.innerHTML = `<legend>${g}</legend>`;
+    if (g === "Auto") fs.id = "grpAuto";
+    for (const [key, label, min, max] of ctls) {
+      const d = document.createElement("div"); d.className = "ctl";
+      d.innerHTML = `<label for="c_${key}">${label}</label><output id="o_${key}"></output><input type="range" id="c_${key}" min="${min}" max="${max}" step="1">`;
+      fs.appendChild(d);
+    }
+    host.appendChild(fs);
+  }
+  host.style.display = "flex"; host.style.flexDirection = "column"; host.style.gap = "18px";
+})();
+const KEYS = GROUPS.flatMap(g => g[1].map(c => c[0]));
+function syncControls() {
+  const s = ed.it.s;
+  $("c_auto").checked = s.auto; $("grpAuto").hidden = !s.auto;
+  for (const k of KEYS) {
+    $("c_" + k).value = s[k];
+    const o = $("o_" + k), v = s[k];
+    o.textContent = k === "strength" ? `${v}%` : (v > 0 ? "+" : "") + v;
+    o.classList.toggle("on", k === "strength" ? v !== 100 : v !== 0);
+  }
+}
+$("rail").addEventListener("input", e => {
+  if (!ed.it) return;
+  const k = e.target.id.slice(2);
+  if (k === "auto") ed.it.s.auto = e.target.checked;
+  else if (KEYS.includes(k)) ed.it.s[k] = +e.target.value;
+  else return;
+  syncControls(); schedule();
+});
+$("rail").addEventListener("dblclick", e => {
+  const lab = e.target.closest(".ctl label"); if (!lab || !ed.it) return;
+  const k = lab.htmlFor.slice(2); ed.it.s[k] = DEFAULTS[k]; syncControls(); schedule();
+});
+async function openEditor(it) {
+  ed.it = it; ed.src = null;
+  $("edTitle").textContent = it.name; $("editor").hidden = false; document.body.style.overflow = "hidden";
+  syncControls(); $("edBusy").hidden = false;
+  navButtons();
+  try {
+    const { data } = await decode(it.file, PREVIEW_MAX);
+    if (ed.it !== it) return;
+    ed.src = data;
+    for (const cv of [$("cvProc"), $("cvOrig")]) { cv.width = data.width; cv.height = data.height; }
+    $("cvOrig").getContext("2d").putImageData(data, 0, 0);
+    $("cvProc").getContext("2d").putImageData(data, 0, 0);
+    setSplit(ed.split); schedule();
+  } catch (e) { toast(e.message); closeEditor(); }
+}
+function schedule() { ed.dirty = true; if (!ed.busy) run(); }
+async function run() {
+  if (!ed.src || !ed.dirty) return;
+  ed.busy = true; ed.dirty = false; $("edBusy").hidden = false;
+  const it = ed.it, src = ed.src;
+  try {
+    const out = await processData(previewW, src, it.analysis, { ...it.s });
+    if (ed.it === it && ed.src === src) $("cvProc").getContext("2d").putImageData(out, 0, 0);
+  } catch (e) { toast(e.message); }
+  ed.busy = false;
+  if (ed.dirty) run(); else $("edBusy").hidden = true;
+}
+function closeEditor() {
+  const it = ed.it; ed.it = null; ed.src = null;
+  $("editor").hidden = true; document.body.style.overflow = "";
+  if (it) updateThumb(it);
+}
+function navButtons() {
+  const ready = items.filter(i => i.status === "ready"), i = ready.indexOf(ed.it);
+  $("edPrev").disabled = i <= 0; $("edNext").disabled = i < 0 || i >= ready.length - 1;
+}
+function step(dir) {
+  const ready = items.filter(i => i.status === "ready"), i = ready.indexOf(ed.it), next = ready[i + dir];
+  if (!next) return; const prev = ed.it; updateThumb(prev); openEditor(next);
+}
+$("edPrev").onclick = () => step(-1); $("edNext").onclick = () => step(1);
+$("edClose").onclick = closeEditor;
+$("edSave").onclick = () => ed.it && saveOne(ed.it);
+$("edAuto").onclick = () => { if (!ed.it) return; ed.it.s = settingsFor(ed.it.analysis, true); syncControls(); schedule(); };
+$("edReset").onclick = () => { if (!ed.it) return; ed.it.s = { ...DEFAULTS, auto: false }; syncControls(); schedule(); };
+$("edApplyAll").onclick = async () => {
+  if (!ed.it) return;
+  const tpl = { ...ed.it.s }, others = items.filter(i => i.status === "ready" && i !== ed.it);
+  for (const it of others) it.s = { ...tpl };
+  toast(`Applied these settings to ${others.length} other photo${others.length === 1 ? "" : "s"}. Auto levels still adapt to each photo.`);
+  for (const it of others) await updateThumb(it);
+};
+if (navigator.canShare && navigator.canShare({ files: [new File([""], "x.jpg", { type: "image/jpeg" })] })) {
+  $("edShare").hidden = false;
+  $("edShare").onclick = async () => {
+    if (!ed.it) return;
+    try { const { blob, name } = await exportItem(ed.it); await navigator.share({ files: [new File([blob], name, { type: blob.type })] }); }
+    catch (e) { if (e.name !== "AbortError") toast(`Sharing didn't work: ${e.message}`); }
+  };
+}
+document.addEventListener("keydown", e => {
+  if ($("editor").hidden) return;
+  if (e.key === "Escape") closeEditor();
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "ArrowLeft") step(-1); if (e.key === "ArrowRight") step(1);
+});
+
+/* Before/after split */
+function setSplit(f) {
+  ed.split = Math.min(1, Math.max(0, f));
+  $("cvOrig").style.clipPath = `inset(0 ${(1 - ed.split) * 100}% 0 0)`;
+  $("split").style.left = `calc(${ed.split * 100}% - 1px)`;
+}
+let dragging = false;
+const posFromEvent = e => { const r = $("compare").getBoundingClientRect(); return (e.clientX - r.left) / r.width; };
+$("stage").addEventListener("pointerdown", e => { dragging = true; $("stage").setPointerCapture(e.pointerId); setSplit(posFromEvent(e)); });
+$("stage").addEventListener("pointermove", e => { if (dragging) setSplit(posFromEvent(e)); });
+$("stage").addEventListener("pointerup", () => dragging = false);
+$("stage").addEventListener("pointercancel", () => dragging = false);
+
+/* ---------- Inputs ---------- */
+const pick = { files: $("inFiles"), zip: $("inZip"), folder: $("inFolder") };
+document.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => pick[b.dataset.pick].click());
+$("btnAdd").onclick = () => $("inFiles").click();
+for (const inp of Object.values(pick)) inp.addEventListener("change", () => { if (inp.files.length) addFiles(inp.files); inp.value = ""; });
+
+async function readEntry(entry, out) {
+  if (entry.isFile) { out.push(await new Promise((res, rej) => entry.file(res, rej))); return; }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    let batch;
+    do { batch = await new Promise((res, rej) => reader.readEntries(res, rej)); for (const e of batch) await readEntry(e, out); } while (batch.length);
+  }
+}
+const dz = document.documentElement;
+dz.addEventListener("dragover", e => { e.preventDefault(); $("drop").classList.add("over"); });
+dz.addEventListener("dragleave", e => { if (!e.relatedTarget) $("drop").classList.remove("over"); });
+dz.addEventListener("drop", async e => {
+  e.preventDefault(); $("drop").classList.remove("over");
+  const dt = e.dataTransfer, entries = [...(dt.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (entries.length) { const out = []; for (const en of entries) { try { await readEntry(en, out); } catch {} } addFiles(out); }
+  else addFiles(dt.files);
+});
+document.addEventListener("paste", e => {
+  const files = [...(e.clipboardData?.files || [])]; if (files.length) addFiles(files);
+});
+
+$("quality").oninput = () => $("qualityVal").textContent = $("quality").value;
+
+/* ---------- Helpers ---------- */
+function setStatus(t) { $("status").textContent = t; }
+function setProgress(f, text) {
+  if (f == null) { $("prog").hidden = true; return; }
+  $("prog").hidden = false; $("prog").firstChild.style.width = `${Math.round(f * 100)}%`;
+  if (text) setStatus(text);
+}
+let toastT;
+function toast(t) { const el = $("toast"); el.textContent = t; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => el.hidden = true, 3500); }
+
+/* Sample photo so the first view shows what the tool does. */
+(async function sample() {
+  const cv = document.createElement("canvas"); cv.width = 1200; cv.height = 800;
+  const c = cv.getContext("2d");
+  const sky = c.createLinearGradient(0, 0, 0, 520); sky.addColorStop(0, "#5a6672"); sky.addColorStop(1, "#8a8478");
+  c.fillStyle = sky; c.fillRect(0, 0, 1200, 800);
+  c.fillStyle = "#8f8a70"; c.beginPath(); c.arc(860, 230, 70, 0, 7); c.fill();
+  c.fillStyle = "#3e4638"; c.beginPath(); c.moveTo(0, 560); c.lineTo(220, 380); c.lineTo(420, 520); c.lineTo(640, 330); c.lineTo(900, 540); c.lineTo(1200, 420); c.lineTo(1200, 800); c.lineTo(0, 800); c.fill();
+  c.fillStyle = "#2c3128"; c.fillRect(0, 620, 1200, 180);
+  c.fillStyle = "#4f5a3f"; c.beginPath(); c.ellipse(600, 700, 520, 60, 0, 0, 7); c.fill();
+  c.fillStyle = "#c9c4b4"; c.fillRect(540, 560, 120, 80); c.fillStyle = "#5c3f2e"; c.beginPath(); c.moveTo(525, 565); c.lineTo(600, 510); c.lineTo(675, 565); c.fill();
+  const id = c.getImageData(0, 0, 1200, 800), d = id.data;
+  for (let i = 0; i < d.length; i += 4) { const n = (Math.random() - 0.5) * 10; d[i] = d[i] * 0.78 + 18 + n; d[i + 1] = d[i + 1] * 0.78 + 20 + n; d[i + 2] = d[i + 2] * 0.78 + 30 + n; }
+  c.putImageData(id, 0, 0);
+  const blob = await canvasBlob(cv, "image/jpeg", 0.9);
+  addFiles([new File([blob], "sample-hazy-landscape.jpg", { type: "image/jpeg" })]);
+})();
+})();
+</script>
+</body>
+</html>
