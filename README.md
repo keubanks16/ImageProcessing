@@ -1,6 +1,6 @@
-# Darkroom — Image Processing
+# GS Photo Lab
 
-A browser-based photo enhancer. Drop in photos one at a time, a whole folder, or a ZIP, and every image is automatically corrected. Fine-tune anything, then save single photos or download everything as a ZIP.
+GS Baseball's browser-based photo enhancer. Drop in photos one at a time, a whole folder, or a ZIP, and every image is automatically corrected. Fine-tune anything, then save single photos or download everything as a ZIP.
 
 Everything runs on your device (canvas + a Web Worker). No photos are uploaded anywhere.
 
