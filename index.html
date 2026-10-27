@@ -974,6 +974,7 @@ const ed = { it: null, src: null, busy: false, dirty: false, split: 0.5 };
 })();
 const KEYS = GROUPS.flatMap(g => g[1].map(c => c[0]));
 function syncControls() {
+  if (window.__resetShare) window.__resetShare();
   const s = ed.it.s;
   $("c_auto").checked = s.auto; $("grpAuto").hidden = !s.auto; $("c_upscale").value = String(s.upscale || 1); $("c_ai").checked = !!s.ai; $("c_ai").disabled = !(s.upscale > 1);
   const a = ed.it.analysis;
@@ -1057,10 +1058,27 @@ $("edApplyAll").onclick = async () => {
 };
 if (navigator.canShare && navigator.canShare({ files: [new File([""], "x.jpg", { type: "image/jpeg" })] })) {
   $("edShare").hidden = false;
-  $("edShare").onclick = async () => {
-    if (!ed.it) return;
-    try { const { blob, name } = await exportItem(ed.it); await navigator.share({ files: [new File([blob], name, { type: blob.type })] }); }
-    catch (e) { if (e.name !== "AbortError") toast(`Sharing didn't work: ${e.message}`); }
+  // iPhone only allows sharing right after a tap, so prepare the photo first, then share on the next tap.
+  const shareKey = it => JSON.stringify([it.id, it.s, $("fmt").value, $("quality").value]);
+  let prepared = null, preparing = false;
+  const shareBtn = $("edShare");
+  const resetShare = () => { shareBtn.textContent = "Share / Save to Photos"; shareBtn.classList.remove("primary"); };
+  window.__resetShare = () => { if (prepared && (!ed.it || prepared.key !== shareKey(ed.it))) { prepared = null; resetShare(); } };
+  shareBtn.onclick = async () => {
+    const it = ed.it; if (!it || preparing) return;
+    if (prepared && prepared.key === shareKey(it)) {
+      try { await navigator.share({ files: [prepared.file] }); }
+      catch (e) { if (e.name !== "AbortError") toast(`Sharing didn't work: ${e.message}`); }
+      return;
+    }
+    preparing = true; shareBtn.disabled = true; shareBtn.textContent = "Preparing…";
+    try {
+      const { blob, name } = await exportItem(it, p => shareBtn.textContent = `AI upscaling ${Math.round(p * 100)}%`);
+      prepared = { key: shareKey(it), file: new File([blob], name, { type: blob.type }) };
+      shareBtn.textContent = "Tap to share"; shareBtn.classList.add("primary");
+      toast("Ready. Tap “Tap to share”, then choose Save Image.");
+    } catch (e) { toast(`Couldn't prepare the photo: ${e.message}`); resetShare(); }
+    finally { preparing = false; shareBtn.disabled = false; }
   };
 }
 document.addEventListener("keydown", e => {
